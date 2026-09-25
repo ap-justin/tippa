@@ -1,24 +1,12 @@
-/** what the browser client posts to the dev server for one pick */
-export interface PickRequest {
-	/** 1-64 chars of `[A-Za-z0-9_-]` */
-	pickId: string;
-	note: string;
-	component: string;
-	file: string;
-	line: number;
-	column?: number | undefined;
-	/** the dev server keeps the first 4000 chars */
-	html: string;
-	/** base64 png of the picked element */
-	screenshot?: string | undefined;
-}
+import type { z } from "zod";
+// type-only, so the browser client importing this module never loads zod
+import type { pickReplySchema, pickRequestSchema } from "./schema.ts";
+
+/** what the browser client posts to the dev server for one pick; see `pickRequestSchema` */
+export type PickRequest = z.output<typeof pickRequestSchema>;
 
 /** payload of the `ui-pick:reply` hmr event */
-export interface PickReply {
-	pickId: string;
-	status: "working" | "done" | "question";
-	message: string;
-}
+export type PickReply = z.output<typeof pickReplySchema>;
 
 export type AgentStatus = "connected" | "waiting";
 

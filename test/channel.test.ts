@@ -1,4 +1,11 @@
-import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+	access,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	stat,
+} from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -10,6 +17,8 @@ import { type Channel, startChannel } from "../src/channel/channel.ts";
 import { type Discovery, discoveryPath } from "../src/channel/discovery.ts";
 
 let cwd: string;
+/** `cwd` with symlinks resolved, as vite reports the files under it */
+let projectDir: string;
 let channel: Channel;
 let client: Client;
 let notifications: Notification[];
@@ -49,7 +58,7 @@ function pick(overrides: Record<string, unknown> = {}) {
 		pickId: `p_${crypto.randomUUID()}`,
 		note: "make this button red",
 		component: "SaveButton",
-		file: "src/components/SaveButton.tsx",
+		file: "/opt/shared/SaveButton.tsx",
 		line: 12,
 		column: 5,
 		html: '<button class="save">Save</button>',
@@ -60,6 +69,7 @@ function pick(overrides: Record<string, unknown> = {}) {
 
 beforeEach(async () => {
 	cwd = await mkdtemp(join(tmpdir(), "ui-pick-test-"));
+	projectDir = await realpath(cwd);
 	const [clientTransport, serverTransport] =
 		InMemoryTransport.createLinkedPair();
 	channel = await startChannel({ cwd, transport: serverTransport });
@@ -87,7 +97,9 @@ test("declares the claude/channel capability and a reply tool", async () => {
 });
 
 test("an authed pick emits one channel notification with the pick", async () => {
-	const body = pick();
+	const body = pick({
+		file: join(projectDir, "src/components/SaveButton.tsx"),
+	});
 	const res = await post("/pick", body);
 	expect(res.status).toBe(202);
 	expect(await res.json()).toEqual({ pickId: body.pickId, status: "sent" });
@@ -108,11 +120,25 @@ test("an authed pick emits one channel notification with the pick", async () => 
 	});
 	expect(params.content).toContain("make this button red");
 	expect(params.content).toContain("SaveButton");
-	expect(params.content).toContain("src/components/SaveButton.tsx:12:5");
+	expect(params.content).toContain(
+		"source: src/components/SaveButton.tsx:12:5\n",
+	);
 	expect(params.content).toContain('<button class="save">Save</button>');
 	expect(await readFile(params.meta.screenshot as string)).toEqual(
 		Buffer.from(PNG_BASE64, "base64"),
 	);
+});
+
+test("a file outside the project keeps its absolute path", async () => {
+	await post("/pick", pick({ column: 2 }));
+
+	await vi.waitFor(() => expect(notifications).toHaveLength(1));
+	const params = notifications[0]?.params as {
+		content: string;
+		meta: Record<string, string>;
+	};
+	expect(params.content).toContain("source: /opt/shared/SaveButton.tsx:12:2\n");
+	expect(params.meta.file).toBe("/opt/shared/SaveButton.tsx");
 });
 
 test("screenshots go to a private per-session dir, named by the helper, removed on close", async () => {

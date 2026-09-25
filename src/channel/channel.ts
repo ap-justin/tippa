@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
@@ -13,8 +13,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import { hasSecretHeader, isClientAbort, readBody, sendJson } from "../http.ts";
+import { pickReplySchema } from "../schema.ts";
 import { removeDiscovery, writeDiscovery } from "./discovery.ts";
-import { formatContent, formatMeta, type Pick, pickSchema } from "./pick.ts";
+import {
+	formatContent,
+	formatMeta,
+	type Pick,
+	pickSchema,
+	projectRelative,
+} from "./pick.ts";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const KEEPALIVE_MS = 30_000;
@@ -45,6 +52,8 @@ export async function startChannel({
 }: ChannelOptions): Promise<Channel> {
 	const listeners = new Set<ServerResponse>();
 	const screenshotDir = await mkdtemp(join(tmpdir(), "ui-pick-"));
+	// vite reports files by their resolved path, so compare against the resolved project
+	const projectDir = await realpath(cwd);
 	let initialized = false;
 	// notifications emitted in arrival order, whatever each screenshot write costs
 	let sending: Promise<unknown> = Promise.resolve();
@@ -63,7 +72,7 @@ export async function startChannel({
 				"Report progress on a ui-pick request back to the developer's browser, shown beside the picked element.",
 			inputSchema: {
 				pick_id: z.string().describe("pick_id from the <channel> tag"),
-				status: z.enum(["working", "done", "question"]),
+				status: pickReplySchema.shape.status,
 				message: z
 					.string()
 					.describe("one line: what you did, or the question to answer"),
@@ -85,7 +94,11 @@ export async function startChannel({
 	};
 	await mcp.connect(transport);
 
-	async function sendPick(pick: Pick): Promise<void> {
+	async function sendPick(received: Pick): Promise<void> {
+		const pick = {
+			...received,
+			file: projectRelative(projectDir, received.file),
+		};
 		let screenshotPath: string | undefined;
 		if (pick.screenshot) {
 			screenshotPath = join(screenshotDir, `${randomUUID()}.png`);

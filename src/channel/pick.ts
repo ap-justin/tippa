@@ -1,18 +1,12 @@
+import { isAbsolute, relative, sep } from "node:path";
 import { z } from "zod";
+import { pickRequestSchema } from "../schema.ts";
 
 const PNG_SIGNATURE = Buffer.from([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
 
-export const pickSchema = z.object({
-	// becomes a filename, so no path separators or dots
-	pickId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
-	note: z.string(),
-	component: z.string(),
-	file: z.string(),
-	line: z.number().int().positive(),
-	column: z.number().int().positive().optional(),
-	html: z.string(),
+export const pickSchema = pickRequestSchema.extend({
 	screenshot: z
 		.base64()
 		.transform((value) => Buffer.from(value, "base64"))
@@ -21,6 +15,14 @@ export const pickSchema = z.object({
 });
 
 export type Pick = z.output<typeof pickSchema>;
+
+/** `file` relative to `projectDir` when inside it, so claude's working dir resolves it; unchanged otherwise */
+export function projectRelative(projectDir: string, file: string): string {
+	const inside = relative(projectDir, file);
+	const outside =
+		inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside);
+	return outside ? file : inside;
+}
 
 export function formatContent(pick: Pick): string {
 	const location = [pick.file, pick.line, pick.column]

@@ -3,6 +3,7 @@ import {
 	mkdtemp,
 	readdir,
 	readFile,
+	realpath,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -38,7 +39,7 @@ import {
 	claudeSession,
 	uiPick,
 } from "../src/index.ts";
-import type { ClientConfig } from "../src/protocol.ts";
+import type { ClientConfig, PickRequest } from "../src/protocol.ts";
 
 let project: string;
 let root: string;
@@ -177,7 +178,7 @@ function pick(overrides: Record<string, unknown> = {}) {
 		pickId: "p_1",
 		note: "make this button red",
 		component: "SaveButton",
-		file: "src/components/SaveButton.tsx",
+		file: "/src/components/SaveButton.tsx",
 		line: 12,
 		html: '<button class="save">Save</button>',
 		...overrides,
@@ -340,6 +341,72 @@ test("a pick posted with the page's token reaches claude with its html cut to 40
 	expect(content).toContain("make this button red");
 	expect(content).toContain(html.slice(0, 4000));
 	expect(content).not.toContain(html.slice(0, 4001));
+});
+
+/** an always-connected agent that keeps what the endpoint forwards */
+function recordingAgent(sent: PickRequest[]): AgentAdapter {
+	return {
+		label: "Recording",
+		connect: () => ({
+			status: "connected",
+			onStatus() {},
+			onReply() {},
+			send: async (pick) => {
+				sent.push(pick);
+			},
+			close: async () => {},
+		}),
+	};
+}
+
+test.each([
+	[
+		"a root-relative url",
+		"/src/App.tsx",
+		async () => join(await realpath(root), "src", "App.tsx"),
+	],
+	[
+		"a url with query and hash",
+		"/src/App.tsx?v=3a1f&import#top",
+		async () => join(await realpath(root), "src", "App.tsx"),
+	],
+	[
+		"an /@fs/ url outside the root",
+		"/@fs/opt/shared/Button.tsx?t=1",
+		async () => "/opt/shared/Button.tsx",
+	],
+])("%s is forwarded as an absolute file path", async (_, file, expected) => {
+	const sent: PickRequest[] = [];
+	const origin = await serve(recordingAgent(sent));
+	const { config } = await loadClient(origin);
+
+	const res = await postPick(origin, pick({ file }), {
+		"x-ui-pick-token": config.token,
+	});
+
+	expect(res.status).toBe(202);
+	expect(sent.map((forwarded) => forwarded.file)).toEqual([await expected()]);
+});
+
+test("claude at the project root reads a nested vite root's file relative to itself", async () => {
+	helper = await startHelper();
+	const origin = await serve(claudeSession());
+	await vi.waitFor(() => expect(logged).toEqual([CONNECTED]), {
+		timeout: 3000,
+	});
+	const { config } = await loadClient(origin);
+
+	await postPick(origin, pick({ file: "/src/App.tsx?t=1", line: 7 }), {
+		"x-ui-pick-token": config.token,
+	});
+
+	await vi.waitFor(() => expect(helper?.notifications).toHaveLength(1));
+	const params = helper?.notifications[0]?.params as {
+		content: string;
+		meta: Record<string, string>;
+	};
+	expect(params.content).toContain("source: apps/web/src/App.tsx:7\n");
+	expect(params.meta.file).toBe("apps/web/src/App.tsx");
 });
 
 test.each([

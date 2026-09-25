@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Connect, Logger, Plugin } from "vite";
 import { z } from "zod";
@@ -8,7 +9,6 @@ import {
 	type AgentConnection,
 	AgentNotConnectedError,
 } from "./agent.ts";
-import { pickSchema } from "./channel/pick.ts";
 import { hasSecretHeader, isClientAbort, readBody, sendJson } from "./http.ts";
 import {
 	type ClientConfig,
@@ -16,6 +16,7 @@ import {
 	STATUS_EVENT,
 	STATUS_REQUEST_EVENT,
 } from "./protocol.ts";
+import { MAX_HTML_CHARS, pickRequestSchema } from "./schema.ts";
 
 export interface UiPickOptions {
 	/** the agent picks are sent to, e.g. `claudeSession()` */
@@ -27,16 +28,15 @@ export interface UiPickOptions {
 const NAME = "ui-pick";
 const ENDPOINT = "/__ui-pick/pick";
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
-const MAX_HTML_CHARS = 4000;
+// vite's url prefix for files served from outside the root
+const FS_PREFIX = "/@fs/";
 const LOADER_ID = "virtual:ui-pick/client";
 const RESOLVED_LOADER_ID = `\0${LOADER_ID}`;
 // extensionless so vite's resolver finds src/client/index.ts and dist/client/index.js alike
 const CLIENT_ENTRY = fileURLToPath(new URL("./client/index", import.meta.url));
 
-// the helper checks the screenshot is a png; here it stays the base64 the client sent
-const pickRequestSchema = pickSchema.extend({
+const truncatedPickSchema = pickRequestSchema.extend({
 	html: z.string().transform((html) => html.slice(0, MAX_HTML_CHARS)),
-	screenshot: z.base64().optional(),
 });
 
 interface ServerSession {
@@ -81,7 +81,9 @@ export function uiPick(options: UiPickOptions): Plugin {
 			hot.on(STATUS_REQUEST_EVENT, (_, client) =>
 				client.send(STATUS_EVENT, { status: agentConnection.status }),
 			);
-			server.middlewares.use(pickEndpoint(token, agentConnection, logger));
+			server.middlewares.use(
+				pickEndpoint({ token, root, agent: agentConnection, logger }),
+			);
 		},
 		async buildEnd() {
 			await sessions.get(this.environment)?.connection.close();
@@ -141,11 +143,17 @@ function validate(options: UiPickOptions): void {
  * 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
  * 503 `not_connected`, 502 `send_failed`
  */
-function pickEndpoint(
-	token: string,
-	agent: AgentConnection,
-	logger: Logger,
-): Connect.NextHandleFunction {
+function pickEndpoint({
+	token,
+	root,
+	agent,
+	logger,
+}: {
+	token: string;
+	root: string;
+	agent: AgentConnection;
+	logger: Logger;
+}): Connect.NextHandleFunction {
 	async function handle(req: IncomingMessage, res: ServerResponse) {
 		if (!isSameOrigin(req)) {
 			req.resume();
@@ -170,7 +178,7 @@ function pickEndpoint(
 				message: "body is not valid json",
 			});
 		}
-		const parsed = pickRequestSchema.safeParse(json);
+		const parsed = truncatedPickSchema.safeParse(json);
 		if (!parsed.success) {
 			return sendJson(res, 400, {
 				error: "invalid_pick",
@@ -181,7 +189,10 @@ function pickEndpoint(
 			return sendJson(res, 503, { error: "not_connected" });
 		}
 		try {
-			await agent.send(parsed.data);
+			await agent.send({
+				...parsed.data,
+				file: sourcePath(parsed.data.file, root),
+			});
 		} catch (error) {
 			if (error instanceof AgentNotConnectedError) {
 				return sendJson(res, 503, { error: "not_connected" });
@@ -200,6 +211,17 @@ function pickEndpoint(
 			if (!isClientAbort(req)) next(error);
 		});
 	};
+}
+
+/**
+ * react-grab reports vite urls: root-relative, or `/@fs/<absolute>` outside the root.
+ * whoever reads the pick runs elsewhere, so it gets the file's absolute path
+ */
+function sourcePath(url: string, root: string): string {
+	const [path = url] = url.split(/[?#]/);
+	return path.startsWith(FS_PREFIX)
+		? path.slice(FS_PREFIX.length - 1)
+		: join(root, path);
 }
 
 /**

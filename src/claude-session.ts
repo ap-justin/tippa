@@ -9,6 +9,7 @@ import {
 } from "./agent.ts";
 import { type Discovery, discoveryPath } from "./channel/discovery.ts";
 import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
+import { pickReplySchema } from "./schema.ts";
 
 const LABEL = "Claude";
 const POLL_MS = 2000;
@@ -21,12 +22,6 @@ const discoverySchema = z.object({
 });
 
 const healthSchema = z.object({ ok: z.literal(true) });
-
-const replySchema = z.object({
-	pickId: z.string(),
-	status: z.enum(["working", "done", "question"]),
-	message: z.string(),
-});
 
 /**
  * sends picks to the claude code session running the `ui-pick-channel` helper.
@@ -258,7 +253,7 @@ async function readReplies(
 
 function parseReply(data: string): PickReply | undefined {
 	try {
-		return replySchema.parse(JSON.parse(data));
+		return pickReplySchema.parse(JSON.parse(data));
 	} catch {
 		return undefined;
 	}
