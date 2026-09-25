@@ -18,6 +18,8 @@ export async function writeDiscovery(
 ): Promise<void> {
 	const path = discoveryPath(cwd);
 	await mkdir(join(cwd, ".ui-pick"), { recursive: true });
+	// the file holds a live secret; keep it out of the app's git
+	await writeFile(join(cwd, ".ui-pick", ".gitignore"), "*\n");
 	const tmp = `${path}.${discovery.pid}.tmp`;
 	await writeFile(tmp, JSON.stringify(discovery), { mode: 0o600 });
 	await rename(tmp, path);

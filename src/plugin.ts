@@ -1,10 +1,11 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Connect, Logger, Plugin } from "vite";
 import { z } from "zod";
 import type { AgentAdapter, AgentConnection } from "./agent.ts";
 import { pickSchema } from "./channel/pick.ts";
+import { hasSecretHeader, readBody, sendJson } from "./http.ts";
 import {
 	type ClientConfig,
 	REPLY_EVENT,
@@ -118,7 +119,7 @@ function validate(options: UiPickOptions): void {
 
 /**
  * `POST /__ui-pick/pick` → 202 `{ pickId, status: "sent" }`, or `{ error }` with
- * 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
+ * 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
  * 503 `not_connected`, 502 `send_failed`
  */
 function pickEndpoint(
@@ -127,7 +128,11 @@ function pickEndpoint(
 	logger: Logger,
 ): Connect.NextHandleFunction {
 	async function handle(req: IncomingMessage, res: ServerResponse) {
-		if (!hasToken(req, token)) {
+		if (!isSameOrigin(req)) {
+			req.resume();
+			return sendJson(res, 403, { error: "forbidden_origin" });
+		}
+		if (!hasSecretHeader(req, "x-ui-pick-token", token)) {
 			req.resume();
 			return sendJson(res, 401, { error: "unauthorized" });
 		}
@@ -173,29 +178,18 @@ function pickEndpoint(
 	};
 }
 
-function hasToken(req: IncomingMessage, token: string): boolean {
-	const given = req.headers["x-ui-pick-token"];
-	if (typeof given !== "string") return false;
-	// hashing first gives equal-length buffers, so a length mismatch leaks nothing
-	const digest = (value: string) => createHash("sha256").update(value).digest();
-	return timingSafeEqual(digest(given), digest(token));
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-	res.writeHead(status, { "content-type": "application/json" });
-	res.end(JSON.stringify(body));
-}
-
-/** resolves undefined once the body passes `limit`, after draining the rest */
-async function readBody(
-	req: IncomingMessage,
-	limit: number,
-): Promise<string | undefined> {
-	const chunks: Buffer[] = [];
-	let size = 0;
-	for await (const chunk of req as AsyncIterable<Buffer>) {
-		size += chunk.length;
-		if (size <= limit) chunks.push(chunk);
+/**
+ * vite's default cors admits every localhost origin, so another local page could read
+ * the token from the loader; only the page's own origin may post
+ */
+function isSameOrigin(req: IncomingMessage): boolean {
+	const site = req.headers["sec-fetch-site"];
+	if (site !== undefined) return site === "same-origin";
+	const { origin, host } = req.headers;
+	if (origin === undefined || host === undefined) return false;
+	try {
+		return new URL(origin).host === host;
+	} catch {
+		return false;
 	}
-	return size > limit ? undefined : Buffer.concat(chunks).toString("utf8");
 }

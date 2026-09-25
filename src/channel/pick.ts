@@ -32,8 +32,20 @@ export function formatContent(pick: Pick): string {
 		`component: ${pick.component}`,
 		`source: ${location}`,
 		"html:",
-		pick.html,
-	].join("\n");
+		fenced(pick.html, "html"),
+	]
+		.join("\n")
+		.replace(/<\/(channel)/gi, "<\\/$1");
+}
+
+/** a fence one backtick longer than any run inside, so the text can't end it */
+function fenced(text: string, lang: string): string {
+	const longest = Math.max(
+		0,
+		...Array.from(text.matchAll(/`+/g), (run) => run[0].length),
+	);
+	const fence = "`".repeat(Math.max(4, longest + 1));
+	return `${fence}${lang}\n${text}\n${fence}`;
 }
 
 export function formatMeta(

@@ -14,6 +14,8 @@ async function shutdown(): Promise<void> {
 	process.exit(0);
 }
 
+// a crash exit skips shutdown; only sync work runs here
+process.on("exit", () => channel.releaseSync());
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 // claude code ending the session closes our stdin

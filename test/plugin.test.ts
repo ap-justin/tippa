@@ -15,6 +15,7 @@ import type { Notification } from "@modelcontextprotocol/sdk/types.js";
 import { build, createServer, type Logger, type ViteDevServer } from "vite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { type Channel, startChannel } from "../src/channel/channel.ts";
+import { type Discovery, discoveryPath } from "../src/channel/discovery.ts";
 import { type AgentAdapter, claudeSession, uiPick } from "../src/index.ts";
 import type { ClientConfig } from "../src/protocol.ts";
 
@@ -45,6 +46,15 @@ async function startHelper(): Promise<Helper> {
 		notifications.push(n);
 	};
 	await client.connect(clientTransport);
+	const { port, secret } = JSON.parse(
+		await readFile(discoveryPath(project), "utf8"),
+	) as Discovery;
+	await vi.waitFor(async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/health`, {
+			headers: { "x-ui-pick-secret": secret },
+		});
+		expect(res.status).toBe(200);
+	});
 	return {
 		channel,
 		client,
@@ -89,8 +99,8 @@ async function serve(agent: AgentAdapter, key?: string): Promise<string> {
 		plugins: [uiPick(key === undefined ? { agent } : { agent, key })],
 	});
 	await server.listen();
-	const { port } = server.httpServer!.address() as AddressInfo;
-	return `http://127.0.0.1:${port}`;
+	const address = server.httpServer?.address() as AddressInfo | undefined;
+	return `http://127.0.0.1:${address?.port}`;
 }
 
 async function getText(url: string): Promise<string> {
@@ -118,7 +128,8 @@ function postPick(
 ): Promise<Response> {
 	return fetch(`${origin}/__ui-pick/pick`, {
 		method: "POST",
-		headers: { "content-type": "application/json", ...headers },
+		// a same-origin browser post carries its own origin
+		headers: { "content-type": "application/json", origin, ...headers },
 		body: typeof body === "string" ? body : JSON.stringify(body),
 	});
 }
@@ -415,4 +426,53 @@ test("status changes are pushed to open pages", async () => {
 		]),
 	);
 	socket.close();
+});
+
+test.each([
+	["another localhost port's origin", { origin: "http://127.0.0.1:1" }],
+	["a cross-site fetch", { origin: undefined, "sec-fetch-site": "cross-site" }],
+	["a same-site fetch from another port", { "sec-fetch-site": "same-site" }],
+	["no origin at all", { origin: undefined }],
+])(
+	"a pick from %s is refused with 403 even with the token",
+	async (_, headers) => {
+		helper = await startHelper();
+		const origin = await serve(claudeSession());
+		await vi.waitFor(() => expect(logged).toEqual([CONNECTED]), {
+			timeout: 3000,
+		});
+		const { config } = await loadClient(origin);
+
+		const res = await fetch(`${origin}/__ui-pick/pick`, {
+			method: "POST",
+			headers: Object.fromEntries(
+				Object.entries({
+					"content-type": "application/json",
+					origin,
+					"x-ui-pick-token": config.token,
+					...headers,
+				}).filter((entry): entry is [string, string] => entry[1] !== undefined),
+			),
+			body: JSON.stringify(pick()),
+		});
+
+		expect(res.status).toBe(403);
+		expect(await res.json()).toEqual({ error: "forbidden_origin" });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(helper.notifications).toEqual([]);
+	},
+);
+
+test("a same-origin browser post passes on sec-fetch-site alone", async () => {
+	const origin = await serve(idleAgent);
+	const { config } = await loadClient(origin);
+
+	const res = await postPick(origin, pick(), {
+		origin: "http://ignored.example",
+		"sec-fetch-site": "same-origin",
+		"x-ui-pick-token": config.token,
+	});
+
+	// past the origin gate: the idle agent isn't connected
+	expect(res.status).toBe(503);
 });
