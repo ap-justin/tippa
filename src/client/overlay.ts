@@ -46,8 +46,6 @@ interface Marker {
 	anchor: Anchor;
 	/** a send that failed after the user moved on; the controller no longer has it */
 	failed: boolean;
-	/** placed for the last time: done, failed, or its element is gone */
-	settled: boolean;
 }
 
 /** follows its element; after an hmr repaint replaces the node, stays where it last was */
@@ -60,8 +58,8 @@ class Anchor {
 		this.#last = element.getBoundingClientRect();
 	}
 
-	get connected(): boolean {
-		return this.#element.isConnected;
+	get element(): Element {
+		return this.#element;
 	}
 
 	rect(): DOMRect {
@@ -81,6 +79,8 @@ export function mountOverlay(controller: PickController): PickTarget {
 	const host = document.createElement("ui-pick-overlay");
 	host.setAttribute("data-react-grab-ignore", "");
 	host.setAttribute("data-react-grab-ignore-events", "");
+	// never a grid or flex item in the dialog it moves into; inline and important beat the page's rules
+	host.style.setProperty("display", "contents", "important");
 	const root = host.attachShadow({ mode: "open" });
 	root.adoptedStyleSheets = [sheet];
 
@@ -116,11 +116,32 @@ export function mountOverlay(controller: PickController): PickTarget {
 	 * outside-click checks count the box as its own, and a native modal leaves it uninert.
 	 */
 	function attach(): void {
+		// a closed or unmounted dialog, possibly with the host inside, before a frame noticed
+		if (modal && !isOpenModal(modal)) modal = enclosingModal();
 		const parent = modal ?? document.documentElement;
+		const moving = host.parentNode !== parent;
+		// moving blurs the note; removed with its dialog, it already lost focus to <body>
+		const active = document.activeElement;
+		const typing =
+			moving &&
+			!composer.hidden &&
+			(host.isConnected
+				? root.activeElement === note
+				: !active || active === document.body);
+		if (moving) parent.append(host);
 		// a moved popover is hidden on removal, so every move re-shows it
-		if (host.parentNode !== parent) parent.append(host);
 		layer.togglePopover(false);
 		layer.togglePopover(true);
+		if (typing) note.focus();
+	}
+
+	/** the next open dialog out from the box's pick, or from the dialog that just closed */
+	function enclosingModal(): Element | undefined {
+		for (const from of [draftAnchor?.element, modal?.parentElement]) {
+			const found = from?.closest(MODAL);
+			if (found && isOpenModal(found)) return found;
+		}
+		return undefined;
 	}
 
 	function isOpenModal(container: Element): boolean {
@@ -164,13 +185,12 @@ export function mountOverlay(controller: PickController): PickTarget {
 			dismissed.delete(pickId);
 			const marker = markers.get(pickId) ?? addMarker(pickId, pick);
 			// unchanged text is left alone: a rewrite re-announces the marker's status region
-			const badgeChanged = setText(marker.badge, state.badge);
-			if (badgeChanged) marker.badge.dataset.badge = state.badge;
-			// new text resizes the panel, so it's placed again
-			if (setText(marker.bubble, state.message ?? "") || badgeChanged)
-				marker.settled = false;
+			if (setText(marker.badge, state.badge))
+				marker.badge.dataset.badge = state.badge;
+			setText(marker.bubble, state.message ?? "");
 		}
-		follow();
+		// new text resizes a panel
+		schedule();
 	}
 
 	function addMarker(pickId: string, { anchor, name }: Sent): Marker {
@@ -195,7 +215,9 @@ export function mountOverlay(controller: PickController): PickTarget {
 			markerRoot.remove();
 			markers.delete(pickId);
 			const state = controller.picks.get(pickId);
-			if (state) dismissed.set(pickId, state);
+			// its element is gone: a later reply would have nowhere to show
+			if (!anchor.element.isConnected) sent.delete(pickId);
+			else if (state) dismissed.set(pickId, state);
 		});
 		layer.append(markerRoot);
 		const marker = {
@@ -204,7 +226,6 @@ export function mountOverlay(controller: PickController): PickTarget {
 			bubble,
 			anchor,
 			failed: false,
-			settled: false,
 		};
 		markers.set(pickId, marker);
 		return marker;
@@ -217,51 +238,65 @@ export function mountOverlay(controller: PickController): PickTarget {
 		marker.badge.textContent = "not sent";
 		marker.badge.dataset.badge = "failed";
 		marker.bubble.textContent = message;
-		follow();
+		schedule();
 	}
 
 	let frame = 0;
-	/** per frame while the box is open or a marker's pick is still moving */
-	function follow(): void {
+	/**
+	 * one placement pass next frame. passes run every frame while the box is open, and
+	 * otherwise when the page scrolls, resizes or changes (an hmr repaint shifts layout)
+	 */
+	function schedule(): void {
 		if (frame) return;
 		frame = requestAnimationFrame(() => {
 			frame = 0;
-			if (modal && !isOpenModal(modal)) {
-				modal = undefined;
-				attach();
-			}
+			if (modal && !isOpenModal(modal)) attach();
 			// removed from the page: nothing to place until a pick or reply attaches it again
 			if (!host.isConnected) return;
-			const moving = [...markers.values()].filter((marker) => !marker.settled);
-			const panels: [HTMLElement, Anchor][] = moving.map((marker) => [
-				marker.root,
-				marker.anchor,
-			]);
-			if (draftAnchor) panels.push([composer, draftAnchor]);
-			// every read before any write: interleaved, each panel forces its own layout
-			const spots = panels.map(([panel, anchor]) =>
-				spotFor(panel, anchor.rect()),
-			);
-			panels.forEach(([panel], index) => {
-				panel.style.transform = spots[index] ?? "";
-			});
-			// placed where it ends up; its pick won't move again
-			for (const marker of moving)
-				marker.settled =
-					marker.failed ||
-					marker.badge.dataset.badge === "done" ||
-					!marker.anchor.connected;
-			if (draftAnchor || moving.some((marker) => !marker.settled)) follow();
+			placeAll();
+			if (draftAnchor) schedule();
 		});
 	}
 
+	function placeAll(): void {
+		const panels: [HTMLElement, Anchor][] = [...markers.values()].map(
+			(marker) => [marker.root, marker.anchor],
+		);
+		if (draftAnchor) panels.push([composer, draftAnchor]);
+		// every read before any write: interleaved, each panel forces its own layout
+		const spots = panels.map(([panel, anchor]) =>
+			spotFor(panel, anchor.rect()),
+		);
+		panels.forEach(([panel], index) => {
+			panel.style.transform = spots[index] ?? "";
+		});
+	}
+
+	function pageMoved(): void {
+		if (markers.size > 0 || draftAnchor) schedule();
+	}
+	document.addEventListener("scroll", pageMoved, {
+		capture: true,
+		passive: true,
+	});
+	window.addEventListener("resize", pageMoved);
+	// changes inside the shadow root, the overlay's own placement included, aren't seen here
+	new MutationObserver(pageMoved).observe(document.documentElement, {
+		subtree: true,
+		childList: true,
+		attributes: true,
+		characterData: true,
+	});
+
 	function close(): void {
+		const picked = draftAnchor?.element;
 		if (draft) draft.cancelled = true;
 		draft = undefined;
 		draftAnchor = undefined;
 		// not when the user already moved on into the page while a send was out
-		if (composer.contains(root.activeElement) && returnFocus?.isConnected)
-			returnFocus.focus({ preventScroll: true });
+		if (composer.contains(root.activeElement))
+			giveFocusBack(returnFocus, picked);
+		returnFocus = undefined;
 		composer.hidden = true;
 		if (modal) {
 			modal = undefined;
@@ -335,14 +370,18 @@ export function mountOverlay(controller: PickController): PickTarget {
 	});
 
 	function open(next: Draft, text: string): void {
-		// focus on the host means the box is already open; keep what it opened over
-		const active = document.activeElement;
-		if (active !== host)
+		// a box already open with focus in it keeps what it first opened over
+		if (composer.hidden || !composer.contains(root.activeElement)) {
+			const active =
+				document.activeElement === host
+					? root.activeElement
+					: document.activeElement;
 			returnFocus =
 				active !== document.body &&
 				(active instanceof HTMLElement || active instanceof SVGElement)
 					? active
 					: undefined;
+		}
 		draft = next;
 		draftAnchor = new Anchor(next.element);
 		modal = next.element.closest(MODAL) ?? undefined;
@@ -355,7 +394,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 		composer.hidden = false;
 		renderComposer();
 		composer.style.transform = spotFor(composer, draftAnchor.rect());
-		follow();
+		schedule();
 		note.focus();
 	}
 
@@ -411,6 +450,32 @@ function spotFor(panel: HTMLElement, rect: DOMRect): string {
 		Math.max(GAP, innerWidth - width - GAP),
 	);
 	return `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+
+/**
+ * `previous`, else the picked element, else its dialog; each only if it takes focus.
+ * none does: focus is left where it falls
+ */
+function giveFocusBack(
+	previous: HTMLElement | SVGElement | undefined,
+	picked: Element | undefined,
+): void {
+	const dialog = picked?.closest(MODAL);
+	for (const candidate of [previous, picked, dialog]) {
+		if (
+			!(candidate instanceof HTMLElement || candidate instanceof SVGElement) ||
+			!candidate.isConnected
+		)
+			continue;
+		candidate.focus({ preventScroll: true });
+		if (tookFocus(candidate)) return;
+	}
+}
+
+function tookFocus(element: Element): boolean {
+	// a document or shadow root; either holds its own focused element
+	const root = element.getRootNode();
+	return "activeElement" in root && root.activeElement === element;
 }
 
 /** true when the text changed */

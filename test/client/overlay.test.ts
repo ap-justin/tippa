@@ -67,7 +67,7 @@ function mount(post = respond(202)) {
 		post,
 	);
 	const overlay = mountOverlay(controller);
-	const host = document.querySelector("ui-pick-overlay");
+	const host = document.querySelector<HTMLElement>("ui-pick-overlay");
 	const root = host?.shadowRoot;
 	if (!host || !root) throw new Error("overlay not mounted");
 	const query = <T extends Element>(selector: string): T => {
@@ -84,7 +84,7 @@ function mount(post = respond(202)) {
 	function pick(
 		picked: Selection | undefined = selection,
 		parent: Element = document.body,
-	): Element {
+	): HTMLElement {
 		const element = document.createElement("div");
 		element.className = "picked";
 		parent.append(element);
@@ -555,45 +555,74 @@ function frames(count: number): Promise<void> {
 	return new Promise((done) => setTimeout(done, 20 * count));
 }
 
-test.each([
-	[
-		"done",
-		(ui: ReturnType<typeof mount>, pickId: string) =>
-			ui.controller.handleReply({ pickId, status: "done", message: "" }),
-	],
-	[
-		"gone from the page",
-		(_: ReturnType<typeof mount>, __: string, element: Element) =>
-			element.remove(),
-	],
-])("a marker whose pick is %s stops following it", async (_, settle) => {
+test.each(["working", "question", "done"] as const)(
+	"with the box closed, a %s marker isn't measured every frame",
+	async (status) => {
+		const ui = mount();
+		const { pickId } = await ui.sendPick();
+		ui.controller.handleReply({ pickId, status, message: "" });
+		await frames(2);
+		const nextFrame = vi.spyOn(window, "requestAnimationFrame");
+
+		await frames(3);
+
+		expect(nextFrame).not.toHaveBeenCalled();
+		nextFrame.mockRestore();
+	},
+);
+
+/** a done marker, and its element moved somewhere else on the page */
+async function settledAndMoved() {
 	const ui = mount();
 	const { pickId, element } = await ui.sendPick();
-	settle(ui, pickId, element);
+	ui.controller.handleReply({
+		pickId,
+		status: "done",
+		message: "made it bold",
+	});
 	await frames(2);
-	const nextFrame = vi.spyOn(window, "requestAnimationFrame");
+	const [marker] = ui.markers();
+	if (!marker) throw new Error("no marker");
+	const before = marker.style.transform;
+	vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+		new DOMRect(40, 300, 10, 10),
+	);
+	return { ui, marker, before };
+}
 
-	await frames(3);
+test.each([
+	[
+		"the page scrolls",
+		() => {
+			const scroller = document.createElement("div");
+			scroller.className = "page";
+			document.body.append(scroller);
+			scroller.dispatchEvent(new Event("scroll"));
+		},
+	],
+	["the window resizes", () => window.dispatchEvent(new Event("resize"))],
+	[
+		"the page repaints (hmr)",
+		() => {
+			const replaced = document.createElement("div");
+			replaced.className = "page";
+			document.body.append(replaced);
+		},
+	],
+])("a done marker follows its element again when %s", async (_, change) => {
+	const { marker, before } = await settledAndMoved();
 
-	expect(nextFrame).not.toHaveBeenCalled();
-	nextFrame.mockRestore();
+	change();
+	await frames(1);
+
+	expect(marker.style.transform).not.toBe(before);
 });
 
-test("a marker still working keeps following its element", async () => {
-	const ui = mount();
-	await ui.sendPick();
-	const nextFrame = vi.spyOn(window, "requestAnimationFrame");
-
-	await frames(3);
-
-	expect(nextFrame).toHaveBeenCalled();
-	nextFrame.mockRestore();
-});
-
-test("each frame measures every marker before moving any", async () => {
+test("a placement pass measures every marker before moving any", async () => {
 	const ui = mount();
 	const a = await ui.sendPick("bold");
 	const b = await ui.sendPick("red", { ...selection, component: "Header" });
+	await frames(2);
 	// where the markers stood at each measurement
 	const spotsAtEachRead: string[] = [];
 	for (const element of [a.element, b.element])
@@ -604,15 +633,21 @@ test("each frame measures every marker before moving any", async () => {
 					.map((marker) => marker.style.transform)
 					.join(" "),
 			);
-			// a new spot every read, so every frame moves both markers
+			// a new spot every read, so the pass moves both markers
 			return new DOMRect(0, spotsAtEachRead.length * 10, 10, 10);
 		});
 
-	await frames(3);
+	window.dispatchEvent(new Event("resize"));
+	await frames(1);
 
-	const [first, second, third] = spotsAtEachRead;
+	const [first, second] = spotsAtEachRead;
 	expect(second).toBe(first);
-	expect(third).not.toBe(second);
+	expect(
+		ui
+			.markers()
+			.map((marker) => marker.style.transform)
+			.join(" "),
+	).not.toBe(second);
 });
 
 /** the content element radix's Dialog renders (no aria-modal), or an aria-modal one */
@@ -701,7 +736,7 @@ test("while react-grab is picking, markers let the pointer through to the page e
 	expect(getComputedStyle(marker).pointerEvents).toBe("auto");
 });
 
-test("a settled marker whose text changes is placed again for its new size", async () => {
+test("a done marker whose text changes is placed again for its new size", async () => {
 	const ui = mount();
 	const { pickId, element } = await ui.sendPick();
 	ui.controller.handleReply({
@@ -720,4 +755,91 @@ test("a settled marker whose text changes is placed again for its new size", asy
 	await frames(2);
 
 	expect(measure).toHaveBeenCalled();
+});
+
+test("a reply landing after the box's dialog unmounted, before the next frame, puts the overlay back on the page", () => {
+	const ui = mount();
+	const modal = openModal({ role: "dialog", "data-state": "open" });
+	ui.pick(selection, modal);
+	modal.remove();
+
+	ui.controller.handleStatus({ status: "connected" });
+
+	expect(ui.host.parentElement).toBe(document.documentElement);
+});
+
+test("the overlay is never a layout item in the dialog it moves into", () => {
+	const ui = mount();
+
+	expect(ui.host.style.getPropertyValue("display")).toBe("contents");
+	expect(ui.host.style.getPropertyPriority("display")).toBe("important");
+});
+
+test("when the inner of two dialogs closes, the box moves to the outer one and keeps focus", async () => {
+	const ui = mount();
+	const outer = openModal({ role: "dialog", "aria-modal": "true" });
+	const inner = document.createElement("div");
+	inner.setAttribute("role", "dialog");
+	inner.setAttribute("data-state", "open");
+	outer.append(inner);
+	ui.pick(selection, inner);
+
+	inner.setAttribute("data-state", "closed");
+	await frames(2);
+
+	expect(ui.host.parentElement).toBe(outer);
+	expect(ui.root.activeElement).toBe(ui.note);
+});
+
+test("a pick made with focus on a marker's dismiss button gives focus back to it", async () => {
+	const ui = mount();
+	await ui.sendPick();
+	const dismiss = ui.markers()[0]?.querySelector("button");
+	dismiss?.focus();
+
+	ui.pick();
+	ui.key({ key: "Escape" });
+
+	expect(ui.root.activeElement).toBe(dismiss);
+});
+
+// happy-dom focuses any element; a browser won't focus a div without a tabindex
+function unfocusable(element: Element): void {
+	Object.assign(element, { focus: () => {} });
+}
+
+test("when focus can't go back where it was, it goes to the picked element", () => {
+	const ui = mount();
+	const before = focusedPageButton();
+	const element = ui.pick();
+	element.tabIndex = 0;
+	before.disabled = true;
+
+	ui.key({ key: "Escape" });
+
+	expect(document.activeElement).toBe(element);
+});
+
+test("when neither the old focus nor the picked element can take it, the dialog does", () => {
+	const ui = mount();
+	const modal = openModal({ role: "dialog", "data-state": "open" });
+	modal.tabIndex = -1;
+	const before = focusedPageButton();
+	unfocusable(ui.pick(selection, modal));
+	before.disabled = true;
+
+	ui.key({ key: "Escape" });
+
+	expect(document.activeElement).toBe(modal);
+});
+
+test("dismissing the marker of an element that's gone forgets the pick", async () => {
+	const ui = mount();
+	const { pickId, element } = await ui.sendPick();
+	element.remove();
+	ui.markers()[0]?.querySelector<HTMLButtonElement>(".dismiss")?.click();
+
+	ui.controller.handleReply({ pickId, status: "done", message: "done" });
+
+	expect(ui.markers()).toHaveLength(0);
 });
