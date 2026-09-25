@@ -43,12 +43,16 @@ export function buildPick({
 	return {
 		pickId,
 		note,
-		component,
-		file,
-		line,
-		html,
-		...(column !== undefined && { column }),
-		...(moduleUrl !== undefined && { moduleUrl }),
-		...(sendable && { screenshot: base64 }),
+		elements: [
+			{
+				component,
+				file,
+				line,
+				html,
+				...(column !== undefined && { column }),
+				...(moduleUrl !== undefined && { moduleUrl }),
+				...(sendable && { screenshot: base64 }),
+			},
+		],
 	};
 }

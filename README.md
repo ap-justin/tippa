@@ -72,22 +72,31 @@ The element gets a status badge: sending, sent, working, done, or question. Clau
 
 ## What Claude receives
 
-Each pick arrives as a `<channel source="tippa">` event. Its body holds your note, the component, the source location and the element's HTML. Its attributes are `pick_id`, `component`, `file`, `line` and `screenshot`. The source path is relative to the folder Claude was started in, or absolute when the file is outside that folder. For example, with Claude at the repo root and Vite at `apps/web`:
+Each pick arrives as a `<channel source="tippa">` event. A pick carries one to five elements. Its body holds your note, then one block per element, numbered in the order you picked them: the component, the source location, the screenshot's path and the element's HTML. `[1]`, `[2]` and so on in your note refer to those blocks. Its attributes are `pick_id` and `elements`, the element count. The source path is relative to the folder Claude was started in, or absolute when the file is outside that folder. For example, with Claude at the repo root and Vite at `apps/web`:
 
 ```
-<channel source="tippa" pick_id="…" component="PriceCard" file="apps/web/src/components/price-card.tsx" line="42" screenshot="/path/to/project/.tippa/shots-…/….png">
-make the price bold
+<channel source="tippa" pick_id="…" elements="2">
+put [1] next to [2]
 
-component: PriceCard
+[1] component: PriceCard
 source: apps/web/src/components/price-card.tsx:42:7
+screenshot: /path/to/project/.tippa/shots-…/….png
 html:
 ````html
 <span class="price">$12</span>
 ````
+
+[2] component: BuyButton
+source: apps/web/src/components/buy-button.tsx:9:3
+screenshot: /path/to/project/.tippa/shots-…/….png
+html:
+````html
+<button>Buy</button>
+````
 </channel>
 ```
 
-`screenshot` is a PNG of the picked element in `.tippa/` inside the project, so Claude can read it without an extra permission prompt. It's deleted when the session ends. Claude tells the channel "working" when it starts, then "done" or "question", and those updates drive the badge and the reply bubble.
+Each `screenshot` is a PNG of its element in `.tippa/` inside the project, so Claude can read it without an extra permission prompt. It's deleted when the session ends. Claude tells the channel "working" when it starts, then "done" or "question", and those updates drive the badge and the reply bubble.
 
 ## Security
 

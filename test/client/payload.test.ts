@@ -25,10 +25,14 @@ test("a pick built from a selection passes the helper's schema", () => {
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 	expect(pick).toMatchObject({
 		note: "make the price bold",
-		component: "PriceCard",
-		file: "/src/components/price-card.tsx",
-		line: 42,
-		column: 7,
+		elements: [
+			{
+				component: "PriceCard",
+				file: "/src/components/price-card.tsx",
+				line: 42,
+				column: 7,
+			},
+		],
 	});
 });
 
@@ -39,19 +43,19 @@ test("the screenshot is plain base64, without the data url prefix", () => {
 		selection,
 		screenshot: PNG_DATA_URL,
 	});
-	expect(pick.screenshot).toBe("iVBORw0KGgo=");
+	expect(pick.elements[0]?.screenshot).toBe("iVBORw0KGgo=");
 });
 
 test("no screenshot leaves the field out", () => {
 	const pick = buildPick({ pickId: "p1", note: "", selection });
-	expect("screenshot" in pick).toBe(false);
+	expect(pick.elements[0]).not.toHaveProperty("screenshot");
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });
 
 test("an unknown column leaves the field out", () => {
 	const { column: _, ...withoutColumn } = selection;
 	const pick = buildPick({ pickId: "p1", note: "", selection: withoutColumn });
-	expect("column" in pick).toBe(false);
+	expect(pick.elements[0]).not.toHaveProperty("column");
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });
 
@@ -69,7 +73,7 @@ test("a screenshot too big for the dev server's body limit is dropped, not sent"
 		selection,
 		screenshot: huge,
 	});
-	expect("screenshot" in pick).toBe(false);
+	expect(pick.elements[0]).not.toHaveProperty("screenshot");
 });
 
 test.each([
@@ -77,7 +81,7 @@ test.each([
 	["not a png", "data:image/jpeg;base64,/9j/4AAQSkZJRg=="],
 ])("a screenshot that's %s is dropped, not sent", (_, screenshot) => {
 	const pick = buildPick({ pickId: "p1", note: "", selection, screenshot });
-	expect("screenshot" in pick).toBe(false);
+	expect(pick.elements[0]).not.toHaveProperty("screenshot");
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });
 
@@ -98,6 +102,8 @@ test("the posted pick carries the module url and react-grab's column counted fro
 
 	const pick = buildPick({ pickId: "p1", note: "", selection: picked });
 
-	expect(pick).toMatchObject({ file: "price-card.tsx", column: 1, moduleUrl });
+	expect(pick.elements).toMatchObject([
+		{ file: "price-card.tsx", column: 1, moduleUrl },
+	]);
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });

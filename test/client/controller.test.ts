@@ -12,10 +12,14 @@ function pick(pickId: string): PickRequest {
 	return {
 		pickId,
 		note: "bigger",
-		component: "Card",
-		file: "/src/card.tsx",
-		line: 3,
-		html: "<div></div>",
+		elements: [
+			{
+				component: "Card",
+				file: "/src/card.tsx",
+				line: 3,
+				html: "<div></div>",
+			},
+		],
 	};
 }
 

@@ -96,6 +96,12 @@ afterEach(async () => {
 	await rm(root, { recursive: true, force: true });
 });
 
+const PICK = {
+	pickId: "p_1",
+	note: "n",
+	elements: [{ component: "C", file: "f.tsx", line: 1, html: "<p></p>" }],
+};
+
 test("a discovery file left by a dead helper is skipped without a request", async () => {
 	const gone = spawn(process.execPath, ["-e", ""]);
 	await once(gone, "exit");
@@ -181,26 +187,10 @@ test("when the stream ends the status is waiting at once and send refuses as not
 
 	await vi.waitFor(() => expect(session.status).toBe("waiting"));
 	expect(statuses).toEqual(["connected", "waiting"]);
-	await expect(
-		session.send({
-			pickId: "p_1",
-			note: "n",
-			component: "C",
-			file: "f.tsx",
-			line: 1,
-			html: "<p></p>",
-		}),
-	).rejects.toBeInstanceOf(AgentNotConnectedError);
+	await expect(session.send(PICK)).rejects.toBeInstanceOf(
+		AgentNotConnectedError,
+	);
 });
-
-const PICK = {
-	pickId: "p_1",
-	note: "n",
-	component: "C",
-	file: "f.tsx",
-	line: 1,
-	html: "<p></p>",
-};
 
 test("a helper that stops listening before its stream ends refuses sends as not connected", async () => {
 	await serveFake(helperLike(() => {}));

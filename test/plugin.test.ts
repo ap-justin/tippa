@@ -173,16 +173,29 @@ function postPick(
 	});
 }
 
-function pick(overrides: Record<string, unknown> = {}) {
+function element(overrides: Record<string, unknown> = {}) {
 	return {
-		pickId: "p_1",
-		note: "make this button red",
 		component: "SaveButton",
 		file: "/src/components/SaveButton.tsx",
 		line: 12,
 		html: '<button class="save">Save</button>',
 		...overrides,
 	};
+}
+
+/** a one-element pick; `overrides` are the element's */
+function pick(overrides: Record<string, unknown> = {}) {
+	return {
+		pickId: "p_1",
+		note: "make this button red",
+		elements: [element(overrides)],
+	};
+}
+
+function forwardedFiles(sent: PickRequest[]): string[] {
+	return sent.flatMap((forwarded) =>
+		forwarded.elements.map((each) => each.file),
+	);
 }
 
 beforeEach(async () => {
@@ -422,7 +435,7 @@ test.each([
 	});
 
 	expect(res.status).toBe(202);
-	expect(sent.map((forwarded) => forwarded.file)).toEqual([await expected()]);
+	expect(forwardedFiles(sent)).toEqual([await expected()]);
 });
 
 /** a module served as the browser loads it, and what react-grab reads from its inline map */
@@ -460,7 +473,7 @@ test("a nested module's map-relative source resolves against the module's own di
 	);
 
 	expect(res.status).toBe(202);
-	expect(sent.map((forwarded) => forwarded.file)).toEqual([
+	expect(forwardedFiles(sent)).toEqual([
 		join(await realpath(root), "src", "ui", "Button.tsx"),
 	]);
 });
@@ -485,9 +498,7 @@ test("an absolute source passes through unchanged", async () => {
 	);
 
 	expect(res.status).toBe(202);
-	expect(sent.map((forwarded) => forwarded.file)).toEqual([
-		"/opt/shared/Button.tsx",
-	]);
+	expect(forwardedFiles(sent)).toEqual(["/opt/shared/Button.tsx"]);
 });
 
 test.each([
@@ -516,7 +527,7 @@ test.each([
 		);
 
 		expect(res.status).toBe(202);
-		expect(sent.map((forwarded) => forwarded.file)).toEqual([
+		expect(forwardedFiles(sent)).toEqual([
 			join(await realpath(root), "src", "my ui", "Save Button.tsx"),
 		]);
 	},
@@ -545,9 +556,76 @@ test("a module served through /@fs/ from outside the root resolves to its own di
 	);
 
 	expect(res.status).toBe(202);
-	expect(sent.map((forwarded) => forwarded.file)).toEqual([
-		join(shared, "Button.tsx"),
+	expect(forwardedFiles(sent)).toEqual([join(shared, "Button.tsx")]);
+});
+
+test("every element of a multi-element pick is forwarded in order with its own path resolved", async () => {
+	const sent: PickRequest[] = [];
+	const origin = await serve(recordingAgent(sent));
+	const { config } = await loadClient(origin);
+	const { sourceFile } = await serveModule(
+		origin,
+		"/src/ui/Button.tsx",
+		join(root, "src", "ui", "Button.tsx"),
+	);
+	const body = {
+		pickId: "p_1",
+		note: "put [1] beside [3]",
+		elements: [
+			element({
+				component: "Button",
+				file: sourceFile,
+				moduleUrl: `${origin}/src/ui/Button.tsx?t=1`,
+			}),
+			element({ component: "App", file: "/src/App.tsx?v=1" }),
+			element({ component: "Shared", file: "/@fs/opt/shared/Card.tsx" }),
+		],
+	};
+
+	const res = await postPick(origin, body, { "x-tippa-token": config.token });
+
+	expect(res.status).toBe(202);
+	const rootDir = await realpath(root);
+	expect(sent).toEqual([
+		{
+			pickId: "p_1",
+			note: "put [1] beside [3]",
+			elements: [
+				{
+					...element({ component: "Button" }),
+					file: join(rootDir, "src", "ui", "Button.tsx"),
+				},
+				{
+					...element({ component: "App" }),
+					file: join(rootDir, "src", "App.tsx"),
+				},
+				{ ...element({ component: "Shared" }), file: "/opt/shared/Card.tsx" },
+			],
+		},
 	]);
+});
+
+test("an element's moduleUrl from another origin is refused with 400 naming that element", async () => {
+	const sent: PickRequest[] = [];
+	const origin = await serve(recordingAgent(sent));
+	const { config } = await loadClient(origin);
+	const body = {
+		pickId: "p_1",
+		note: "",
+		elements: [
+			element(),
+			element({ moduleUrl: "http://evil.test/src/ui/Button.tsx" }),
+		],
+	};
+
+	const res = await postPick(origin, body, { "x-tippa-token": config.token });
+
+	expect(res.status).toBe(400);
+	expect(await res.json()).toEqual({
+		error: "invalid_pick",
+		message: "elements[1].moduleUrl is not a module of this dev server",
+	});
+	expect(sent).toEqual([]);
 });
 
 test.each([
@@ -608,7 +686,6 @@ test("claude at the project root reads a nested vite root's file relative to its
 		meta: Record<string, string>;
 	};
 	expect(params.content).toContain("source: apps/web/src/ui/Button.tsx:7\n");
-	expect(params.meta.file).toBe("apps/web/src/ui/Button.tsx");
 });
 
 test.each([

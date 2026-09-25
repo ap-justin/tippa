@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { MAX_SCREENSHOT_CHARS, PNG_BASE64_PREFIX } from "./protocol.ts";
+import {
+	MAX_PICK_ELEMENTS,
+	MAX_SCREENSHOT_CHARS,
+	PNG_BASE64_PREFIX,
+} from "./protocol.ts";
 
 /** the dev server keeps this many leading chars of a pick's html */
 export const MAX_HTML_CHARS = 4000;
@@ -15,10 +19,8 @@ export const pngBase64Schema = z
 	.max(MAX_SCREENSHOT_CHARS)
 	.refine((value) => value.startsWith(PNG_BASE64_PREFIX), "not a png");
 
-/** what the browser client posts to the dev server for one pick */
-export const pickRequestSchema = z.object({
-	pickId: pickIdSchema,
-	note: z.string(),
+/** one picked element of a pick */
+export const pickElementSchema = z.object({
 	component: z.string(),
 	/**
 	 * as the client posts it, react-grab's source: the sourcemap's `sources` entry, relative to
@@ -37,6 +39,14 @@ export const pickRequestSchema = z.object({
 	html: z.string(),
 	/** base64 png of the picked element */
 	screenshot: pngBase64Schema.optional(),
+});
+
+/** what the browser client posts to the dev server for one pick */
+export const pickRequestSchema = z.object({
+	pickId: pickIdSchema,
+	/** refers to `elements[i]` by the literal marker `[i + 1]` */
+	note: z.string(),
+	elements: z.array(pickElementSchema).min(1).max(MAX_PICK_ELEMENTS),
 });
 
 /** what an agent reports back about a pick, sent to the page as the `tippa:reply` hmr event */

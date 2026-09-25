@@ -344,9 +344,13 @@ test("the posted pick passes the dev server's schema, screenshot and module url 
 	expect(pickRequestSchema.safeParse(body).success).toBe(true);
 	expect(body).toMatchObject({
 		note: "make the price bold",
-		column: 8,
-		moduleUrl: selection.moduleUrl,
-		screenshot: "iVBORw0KGgo=",
+		elements: [
+			{
+				column: 8,
+				moduleUrl: selection.moduleUrl,
+				screenshot: "iVBORw0KGgo=",
+			},
+		],
 	});
 });
 

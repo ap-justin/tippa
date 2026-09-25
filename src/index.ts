@@ -8,6 +8,7 @@ export { claudeSession } from "./claude-session.ts";
 export { type TippaOptions, tippa } from "./plugin.ts";
 export type {
 	AgentStatus,
+	PickElement,
 	PickReply,
 	PickRequest,
 	StatusEvent,

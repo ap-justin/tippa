@@ -1,14 +1,5 @@
 import { isAbsolute, relative, sep } from "node:path";
-import type { z } from "zod";
-import { pickRequestSchema, pngBase64Schema } from "../schema.ts";
-
-export const pickSchema = pickRequestSchema.extend({
-	screenshot: pngBase64Schema
-		.transform((value) => Buffer.from(value, "base64"))
-		.optional(),
-});
-
-export type Pick = z.output<typeof pickSchema>;
+import type { PickElement, PickRequest } from "../protocol.ts";
 
 /** `file` relative to `projectDir` when inside it, so claude's working dir resolves it; unchanged otherwise */
 export function projectRelative(projectDir: string, file: string): string {
@@ -18,20 +9,39 @@ export function projectRelative(projectDir: string, file: string): string {
 	return outside ? file : inside;
 }
 
-export function formatContent(pick: Pick): string {
-	const location = [pick.file, pick.line, pick.column]
+/** the note, then one block per element headed by the marker the note refers to it by */
+export function formatContent(
+	pick: PickRequest,
+	screenshotPaths: readonly (string | undefined)[],
+): string {
+	const blocks = pick.elements.map((element, index) =>
+		formatElement(element, index + 1, screenshotPaths[index]),
+	);
+	return [pick.note, ...blocks]
+		.join("\n\n")
+		.replace(/<\/(channel)/gi, "<\\/$1");
+}
+
+function formatElement(
+	element: PickElement,
+	marker: number,
+	screenshotPath: string | undefined,
+): string {
+	const location = [element.file, element.line, element.column]
 		.filter((part) => part !== undefined)
 		.join(":");
 	return [
-		pick.note,
-		"",
-		`component: ${pick.component}`,
-		`source: ${location}`,
+		`[${marker}] component: ${oneLine(element.component)}`,
+		`source: ${oneLine(location)}`,
+		...(screenshotPath ? [`screenshot: ${screenshotPath}`] : []),
 		"html:",
-		fenced(pick.html, "html"),
-	]
-		.join("\n")
-		.replace(/<\/(channel)/gi, "<\\/$1");
+		fenced(element.html, "html"),
+	].join("\n");
+}
+
+/** page data on a header line can't start a line of its own and forge another element's block */
+function oneLine(text: string): string {
+	return text.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, "");
 }
 
 /** a fence one backtick longer than any run inside, so the text can't end it */
@@ -44,16 +54,10 @@ function fenced(text: string, lang: string): string {
 	return `${fence}${lang}\n${text}\n${fence}`;
 }
 
-/** meta values become `<channel>` tag attributes: page data is cut to chars that can't end or forge one */
-export function formatMeta(
-	pick: Pick,
-	screenshotPath: string | undefined,
-): Record<string, string> {
+/** meta values become `<channel>` tag attributes, so they hold no page data */
+export function formatMeta(pick: PickRequest): Record<string, string> {
 	return {
 		pick_id: pick.pickId,
-		component: pick.component.replace(/[^A-Za-z0-9_.$-]/g, "_"),
-		file: pick.file.replace(/["<>\p{Cc}]/gu, ""),
-		line: String(pick.line),
-		...(screenshotPath && { screenshot: screenshotPath }),
+		elements: String(pick.elements.length),
 	};
 }

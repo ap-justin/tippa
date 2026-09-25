@@ -1,9 +1,16 @@
 import type { z } from "zod";
 // type-only, so the browser client importing this module never loads zod
-import type { pickReplySchema, pickRequestSchema } from "./schema.ts";
+import type {
+	pickElementSchema,
+	pickReplySchema,
+	pickRequestSchema,
+} from "./schema.ts";
 
 /** see `pickRequestSchema` */
 export type PickRequest = z.output<typeof pickRequestSchema>;
+
+/** see `pickElementSchema` */
+export type PickElement = z.output<typeof pickElementSchema>;
 
 /** payload of the `tippa:reply` hmr event */
 export type PickReply = z.output<typeof pickReplySchema>;
@@ -27,8 +34,15 @@ export interface ClientConfig {
 
 /** the dev server and the channel helper refuse a pick body past this */
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
-/** base64 chars a screenshot may take, leaving room in the body for the html and the json around it */
-export const MAX_SCREENSHOT_CHARS = MAX_BODY_BYTES - 2 * 1024 * 1024;
+/** elements one pick may carry; the note refers to them as `[1]`…`[5]` */
+export const MAX_PICK_ELEMENTS = 5;
+/**
+ * base64 chars each element's screenshot may take: a full pick's screenshots together
+ * leave room in the body for the html and the json around them
+ */
+export const MAX_SCREENSHOT_CHARS = Math.floor(
+	(MAX_BODY_BYTES - 2 * 1024 * 1024) / MAX_PICK_ELEMENTS,
+);
 /** base64 of the 8-byte png signature and the ihdr length's leading zero bits */
 export const PNG_BASE64_PREFIX = "iVBORw0KGgo";
 

@@ -13,6 +13,7 @@ import { hasSecretHeader, isClientAbort, readBody, sendJson } from "./http.ts";
 import {
 	type ClientConfig,
 	MAX_BODY_BYTES,
+	type PickElement,
 	REPLY_EVENT,
 	STATUS_EVENT,
 	STATUS_REQUEST_EVENT,
@@ -34,10 +35,6 @@ const LOADER_ID = "virtual:tippa/client";
 const RESOLVED_LOADER_ID = `\0${LOADER_ID}`;
 // extensionless so vite's resolver finds src/client/index.ts and dist/client/index.js alike
 const CLIENT_ENTRY = fileURLToPath(new URL("./client/index", import.meta.url));
-
-const truncatedPickSchema = pickRequestSchema.extend({
-	html: z.string().transform((html) => html.slice(0, MAX_HTML_CHARS)),
-});
 
 interface ServerSession {
 	token: string;
@@ -209,37 +206,40 @@ function pickEndpoint({
 				message: "body is not valid json",
 			});
 		}
-		const parsed = truncatedPickSchema.safeParse(json);
+		const parsed = pickRequestSchema.safeParse(json);
 		if (!parsed.success) {
 			return sendJson(res, 400, {
 				error: "invalid_pick",
 				message: z.prettifyError(parsed.error),
 			});
 		}
-		const { moduleUrl, ...pick } = parsed.data;
-		const moduleFile =
-			moduleUrl === undefined
-				? undefined
-				: await moduleFilePath(moduleUrl, {
-						host: req.headers.host,
-						root,
-						environment,
-					});
-		if (moduleUrl !== undefined && moduleFile === undefined) {
-			return sendJson(res, 400, {
-				error: "invalid_pick",
-				message: "moduleUrl is not a module of this dev server",
+		const elements: PickElement[] = [];
+		for (const [
+			index,
+			{ moduleUrl, ...element },
+		] of parsed.data.elements.entries()) {
+			const file = await sourceFilePath(element.file, moduleUrl, {
+				host: req.headers.host,
+				root,
+				environment,
+			});
+			if (file === undefined) {
+				return sendJson(res, 400, {
+					error: "invalid_pick",
+					message: `elements[${index}].moduleUrl is not a module of this dev server`,
+				});
+			}
+			elements.push({
+				...element,
+				file,
+				html: element.html.slice(0, MAX_HTML_CHARS),
 			});
 		}
-		const file =
-			moduleFile === undefined
-				? viteUrlPath(pick.file, root)
-				: mapSourcePath(pick.file, moduleFile);
 		if (agent.status !== "connected") {
 			return sendJson(res, 503, { error: "not_connected" });
 		}
 		try {
-			await agent.send({ ...pick, file });
+			await agent.send({ ...parsed.data, elements });
 		} catch (error) {
 			if (error instanceof AgentNotConnectedError) {
 				return sendJson(res, 503, { error: "not_connected" });
@@ -258,6 +258,26 @@ function pickEndpoint({
 			if (!isClientAbort(req)) next(error);
 		});
 	};
+}
+
+interface ServedModuleContext {
+	host: string | undefined;
+	root: string;
+	environment: DevEnvironment;
+}
+
+/**
+ * the absolute path of an element's source: `file` read against the module the page loaded,
+ * or as a vite url without one; undefined when `moduleUrl` isn't a module of this dev server
+ */
+async function sourceFilePath(
+	file: string,
+	moduleUrl: string | undefined,
+	context: ServedModuleContext,
+): Promise<string | undefined> {
+	if (moduleUrl === undefined) return viteUrlPath(file, context.root);
+	const moduleFile = await moduleFilePath(moduleUrl, context);
+	return moduleFile && mapSourcePath(file, moduleFile);
 }
 
 /**
@@ -281,11 +301,7 @@ function servedPathFile(path: string, root: string): string {
  */
 async function moduleFilePath(
 	moduleUrl: string,
-	{
-		host,
-		root,
-		environment,
-	}: { host: string | undefined; root: string; environment: DevEnvironment },
+	{ host, root, environment }: ServedModuleContext,
 ): Promise<string | undefined> {
 	let path: string;
 	try {
