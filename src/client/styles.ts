@@ -67,6 +67,20 @@ textarea {
 	color: inherit;
 	font: inherit;
 }
+.elements { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.elements li { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.element-name { overflow-wrap: anywhere; }
+.remove { padding: 0 6px; line-height: 1.2; }
+.tag {
+	position: absolute;
+	top: 0;
+	left: 0;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--tippa-fg);
+	color: var(--tippa-bg);
+	font-size: 12px;
+}
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 button {
 	padding: 4px 10px;

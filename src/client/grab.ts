@@ -12,15 +12,18 @@ declare global {
 
 /** what react-grab tells the overlay */
 export interface PickTarget {
-	/** `selection` is undefined when react-grab found no source file and line */
+	/**
+	 * opens the note on `element`, or adds it to the note already open.
+	 * `selection` is undefined when react-grab found no source file and line
+	 */
 	pick(element: Element, selection: Selection | undefined): void;
 	/** react-grab started or stopped picking */
 	grabbing(active: boolean): void;
 }
 
 /**
- * opens the note on a clicked element as react-grab copies it, and adds "Send to
- * Claude" to react-grab's menu. joins the page's react-grab when it already runs
+ * opens the note on a clicked element as react-grab copies it, or adds it to the open
+ * note, and adds "Send to Claude" to react-grab's menu. joins the page's react-grab when it already runs
  * one; otherwise starts one and publishes it the way react-grab's entry does, so
  * an app that imports react-grab later reuses it instead of drawing a second picker.
  */

@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { PickController } from "../../src/client/controller.ts";
 import { mountOverlay } from "../../src/client/overlay.ts";
 import type { Selection } from "../../src/client/payload.ts";
-import type { PickRequest } from "../../src/protocol.ts";
+import { MAX_SCREENSHOT_CHARS, type PickRequest } from "../../src/protocol.ts";
 import { pickRequestSchema } from "../../src/schema.ts";
 
 const { domToPng } = vi.hoisted(() => ({
@@ -61,6 +61,7 @@ function respond(status: number) {
 }
 
 function mount(post = respond(202)) {
+	domToPng.mockClear();
 	domToPng.mockResolvedValue(PNG_DATA_URL);
 	const controller = new PickController(
 		{ token: "t0ken", endpoint: "/__tippa/pick" },
@@ -81,14 +82,15 @@ function mount(post = respond(202)) {
 	const cancel = query<HTMLButtonElement>('button[type="button"]');
 	const notice = query<HTMLElement>(".notice");
 
+	/** `null`: react-grab found no source for it */
 	function pick(
-		picked: Selection | undefined = selection,
+		picked: Selection | null = selection,
 		parent: Element = document.body,
 	): HTMLElement {
 		const element = document.createElement("div");
 		element.className = "picked";
 		parent.append(element);
-		overlay.pick(element, picked);
+		overlay.pick(element, picked ?? undefined);
 		return element;
 	}
 
@@ -265,11 +267,7 @@ test("a screenshot still rendering after 5 s is given up on and the pick sends w
 test("the screenshot is capped to a canvas size browsers can draw, and a slow asset is skipped before the 5 s deadline", () => {
 	const ui = mount();
 	ui.pick();
-	// the mock's type is domToPng's last overload, (context); this call used (node, options)
-	const [, options] = (domToPng.mock.calls[0] ?? []) as unknown as [
-		Node,
-		Options?,
-	];
+	const options = captureOptions(0);
 	expect(options).toMatchObject({ maximumCanvasSize: 10_000 });
 	expect(options?.timeout).toBeLessThan(5000);
 });
@@ -291,15 +289,17 @@ test("a 503 answered after claude connected leaves send on to retry", async () =
 	expect(ui.composer.hidden).toBe(false);
 });
 
-test("picking again before sending keeps the note", () => {
+test("a pick after one react-grab found no source for replaces it and keeps the note", () => {
 	const ui = mount();
-	ui.pick(undefined);
+	ui.pick(null);
 	ui.type("make the price bold");
+	expect(ui.send.disabled).toBe(true);
 
 	ui.pick();
 
 	expect(ui.note.value).toBe("make the price bold");
 	expect(ui.send.disabled).toBe(false);
+	expect(rows(ui)).toEqual([{ text: "[1] PriceCard", remove: null }]);
 });
 
 test("picking again after a send starts an empty note", async () => {
@@ -846,4 +846,291 @@ test("dismissing the marker of an element that's gone forgets the pick", async (
 	ui.controller.handleReply({ pickId, status: "done", message: "done" });
 
 	expect(ui.markers()).toHaveLength(0);
+});
+
+function rows(ui: ReturnType<typeof mount>) {
+	return [...ui.root.querySelectorAll<HTMLElement>(".elements li")].map(
+		(row) => ({
+			text: row.querySelector(".element-name")?.textContent,
+			remove: row.querySelector("button")?.getAttribute("aria-label") ?? null,
+		}),
+	);
+}
+
+test("a first pick opens an empty note listing the element as [1], which can't be removed", () => {
+	const ui = mount();
+
+	ui.pick();
+
+	expect(ui.note.value).toBe("");
+	expect(rows(ui)).toEqual([{ text: "[1] PriceCard", remove: null }]);
+});
+
+const HEADER: Selection = { ...selection, component: "Header", line: 7 };
+const FOOTER: Selection = { ...selection, component: "Footer", line: 99 };
+
+test("a pick while the box is open adds the element as [2] at the cursor, spaced, and keeps the note", () => {
+	const ui = mount();
+	ui.pick();
+	ui.type("put this beside please");
+	ui.note.setSelectionRange(15, 15);
+
+	ui.pick(HEADER);
+
+	expect(ui.note.value).toBe("put this beside [2] please");
+	expect(ui.note.selectionStart).toBe(19);
+	expect(ui.root.activeElement).toBe(ui.note);
+	expect(ui.root.querySelector(".target")?.textContent).toMatch(/^PriceCard/);
+	expect(rows(ui)).toEqual([
+		{ text: "[1] PriceCard", remove: null },
+		{ text: "[2] Header", remove: "Remove [2] Header" },
+	]);
+});
+
+test("removing [2] of three drops its markers from the note and renumbers [3] to [2], in the text and the list", () => {
+	const ui = mount();
+	ui.pick();
+	ui.pick(HEADER);
+	ui.pick(FOOTER);
+	ui.type("[2] goes; put [3] beside [1], not [2]. [2]!");
+
+	ui.root
+		.querySelector<HTMLButtonElement>('[aria-label="Remove [2] Header"]')
+		?.click();
+
+	expect(ui.note.value).toBe("goes; put [2] beside [1], not.!");
+	expect(rows(ui)).toEqual([
+		{ text: "[1] PriceCard", remove: null },
+		{ text: "[2] Footer", remove: "Remove [2] Footer" },
+	]);
+	expect(ui.root.activeElement).toBe(ui.note);
+});
+
+test("a sixth element isn't added, and the notice says why", () => {
+	const ui = mount();
+	for (let added = 0; added < 5; added++) ui.pick();
+	const before = ui.note.value;
+
+	ui.pick(HEADER);
+
+	expect(rows(ui)).toHaveLength(5);
+	expect(ui.note.value).toBe(before);
+	expect(ui.notice.textContent).toBe("Up to 5 elements per note.");
+	expect(ui.root.activeElement).toBe(ui.note);
+});
+
+test("a pick with no source while the box is open isn't added, and the notice says why", () => {
+	const ui = mount();
+	ui.pick();
+	ui.type("beside");
+
+	ui.pick(null);
+
+	expect(rows(ui)).toHaveLength(1);
+	expect(ui.note.value).toBe("beside");
+	expect(ui.notice.textContent).toMatch(/^react-grab found no source file/);
+	expect(ui.send.disabled).toBe(false);
+});
+
+test("picking an element already in the note inserts its marker instead of adding it again", () => {
+	const ui = mount();
+	const first = ui.pick();
+	ui.pick(HEADER);
+	ui.type("this");
+	ui.note.setSelectionRange(4, 4);
+
+	ui.overlay.pick(first, selection);
+
+	expect(ui.note.value).toBe("this [1]");
+	expect(rows(ui)).toHaveLength(2);
+});
+
+test("send waits for every element's screenshot and posts the elements in marker order", async () => {
+	const ui = mount();
+	const { promise: headerShot, resolve } = deferred<string>();
+	ui.pick();
+	domToPng.mockReturnValueOnce(headerShot);
+	ui.pick(HEADER);
+	ui.pick(FOOTER);
+	ui.type("put [3] between [1] and [2]");
+
+	ui.send.click();
+	await settle();
+	expect(ui.post).not.toHaveBeenCalled();
+	resolve(PNG_DATA_URL);
+
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	const [body] = ui.posted();
+	expect(pickRequestSchema.safeParse(body).success).toBe(true);
+	expect(body).toMatchObject({
+		note: "put [3] between [1] and [2]",
+		elements: [
+			{ component: "PriceCard", screenshot: "iVBORw0KGgo=" },
+			{ component: "Header", screenshot: "iVBORw0KGgo=" },
+			{ component: "Footer", screenshot: "iVBORw0KGgo=" },
+		],
+	});
+});
+
+const OVER_BUDGET = `data:image/png;base64,${"iVBORw0KGgo".padEnd(MAX_SCREENSHOT_CHARS + 4, "A")}`;
+
+function captureOptions(call: number): Options | undefined {
+	// the mock's type is domToPng's last overload, (context); these calls used (node, options)
+	const [, options] = (domToPng.mock.calls[call] ?? []) as unknown as [
+		Node,
+		Options?,
+	];
+	return options;
+}
+
+test("a screenshot over its budget is taken again at a smaller scale", async () => {
+	const ui = mount();
+	domToPng.mockResolvedValueOnce(OVER_BUDGET);
+	ui.pick();
+
+	ui.send.click();
+
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	expect(domToPng).toHaveBeenCalledTimes(2);
+	expect(captureOptions(1)?.scale).toBeLessThan(1);
+	expect(ui.posted()[0]?.elements[0]?.screenshot).toBe("iVBORw0KGgo=");
+});
+
+test("a screenshot still over its budget at the smaller scale is left out", async () => {
+	const ui = mount();
+	domToPng.mockResolvedValue(OVER_BUDGET);
+	ui.pick();
+
+	ui.send.click();
+
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	expect(domToPng).toHaveBeenCalledTimes(2);
+	expect(ui.posted()[0]?.elements[0]).not.toHaveProperty("screenshot");
+});
+
+test("after Escape, the next pick starts a fresh note with it as [1]", () => {
+	const ui = mount();
+	ui.pick();
+	ui.pick(HEADER);
+	ui.type("[2] beside [1]");
+	ui.key({ key: "Escape" });
+
+	ui.pick(FOOTER);
+
+	expect(ui.composer.hidden).toBe(false);
+	expect(ui.note.value).toBe("");
+	expect(rows(ui)).toEqual([{ text: "[1] Footer", remove: null }]);
+});
+
+test("a multi-element send that fails after picking something else comes back with all its elements", async () => {
+	const { promise: response, resolve } = deferred<Response>();
+	const ui = mount(vi.fn<typeof fetch>(() => response));
+	ui.pick();
+	ui.pick(HEADER);
+	ui.pick(FOOTER);
+	ui.type("put [3] between [1] and [2]");
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	ui.pick({ ...selection, component: "Sidebar" });
+	expect(rows(ui)).toEqual([{ text: "[1] Sidebar", remove: null }]);
+
+	resolve(Response.json({ error: "invalid_pick" }, { status: 400 }));
+
+	await vi.waitFor(() =>
+		expect(ui.note.value).toBe("put [3] between [1] and [2]"),
+	);
+	expect(rows(ui).map((row) => row.text)).toEqual([
+		"[1] PriceCard",
+		"[2] Header",
+		"[3] Footer",
+	]);
+	expect(ui.notice.textContent).toBe("Couldn't send (400 invalid_pick)");
+	expect(ui.send.disabled).toBe(false);
+});
+
+test("while a note sends, its remove buttons are off", async () => {
+	const { promise: response, resolve } = deferred<Response>();
+	const ui = mount(vi.fn<typeof fetch>(() => response));
+	ui.pick();
+	ui.pick(HEADER);
+
+	ui.send.click();
+
+	const remove = ui.root.querySelector<HTMLButtonElement>(".remove");
+	expect(remove?.disabled).toBe(true);
+	resolve(Response.json({ error: "invalid_pick" }, { status: 400 }));
+	await vi.waitFor(() => expect(remove?.disabled).toBe(false));
+});
+
+function tags(ui: ReturnType<typeof mount>): (string | null)[] {
+	return [...ui.root.querySelectorAll(".tag")].map((tag) => tag.textContent);
+}
+
+test("each element of an open note is tagged with its number on the page, and removing one renumbers the tags", () => {
+	const ui = mount();
+	ui.pick();
+	ui.pick(HEADER);
+	ui.pick(FOOTER);
+	expect(tags(ui)).toEqual(["[1]", "[2]", "[3]"]);
+
+	ui.root.querySelector<HTMLButtonElement>(".remove")?.click();
+
+	expect(tags(ui)).toEqual(["[1]", "[2]"]);
+});
+
+test("after a send, the pick's badge sits on element 1 and the other tags stay until the pick is done", async () => {
+	const ui = mount();
+	ui.pick();
+	ui.pick(HEADER);
+	ui.pick(FOOTER);
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.composer.hidden).toBe(true));
+	const [{ pickId } = { pickId: "" }] = ui.posted();
+
+	expect(ui.markers()).toHaveLength(1);
+	expect(tags(ui)).toEqual(["[2]", "[3]"]);
+
+	ui.controller.handleReply({ pickId, status: "working", message: "" });
+	expect(tags(ui)).toEqual(["[2]", "[3]"]);
+
+	ui.controller.handleReply({ pickId, status: "done", message: "moved it" });
+	expect(tags(ui)).toEqual([]);
+});
+
+test("Escape clears the note's tags", () => {
+	const ui = mount();
+	ui.pick();
+	ui.pick(HEADER);
+
+	ui.key({ key: "Escape" });
+
+	expect(tags(ui)).toEqual([]);
+});
+
+test("a new tag is placed on its element right away", () => {
+	const ui = mount();
+	ui.pick();
+	const element = document.createElement("div");
+	element.className = "picked";
+	document.body.append(element);
+	vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+		new DOMRect(40, 30, 10, 10),
+	);
+
+	ui.overlay.pick(element, HEADER);
+
+	const tag = [...ui.root.querySelectorAll<HTMLElement>(".tag")].at(-1);
+	expect(tag?.style.transform).toBe("translate(40px, 30px)");
+});
+
+test("adding an element inside an open dialog moves the box into it and keeps focus in the note", () => {
+	const ui = mount();
+	ui.pick();
+	const modal = openModal({ role: "dialog", "data-state": "open" });
+
+	ui.pick(HEADER, modal);
+
+	expect(ui.host.parentElement).toBe(modal);
+	expect(ui.root.activeElement).toBe(ui.note);
+	expect(rows(ui)).toHaveLength(2);
 });

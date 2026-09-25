@@ -1,11 +1,12 @@
 import { domToPng } from "modern-screenshot";
+import { MAX_PICK_ELEMENTS, MAX_SCREENSHOT_CHARS } from "../protocol.ts";
 import {
 	NOT_CONNECTED,
 	type PickController,
 	type PickState,
 } from "./controller.ts";
 import type { PickTarget } from "./grab.ts";
-import { buildPick, newPickId, type Selection } from "./payload.ts";
+import { base64Of, buildPick, newPickId, type Selection } from "./payload.ts";
 import { css } from "./styles.ts";
 
 const GAP = 8;
@@ -16,27 +17,47 @@ const ASSET_TIMEOUT_MS = 2000;
 // per side; a larger canvas is scaled down to fit. mdn: desktop browsers draw at least 10k x 10k,
 // and past a browser's limit the canvas is empty
 const MAX_CANVAS_SIDE = 10_000;
+// under the scale that would just fit: compression varies with the content
+const RETRY_MARGIN = 0.9;
 // radix's Dialog content sets no aria-modal; its role and open state mark it
 const MODAL =
 	'dialog:modal, [aria-modal="true"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]';
 const RACED_CONNECT = "Couldn't reach Claude. Send again.";
+const TOO_MANY = `Up to ${MAX_PICK_ELEMENTS} elements per note.`;
 const NO_SOURCE =
 	"react-grab found no source file for this element. Try picking its parent component.";
 
-interface Draft {
-	element: Element;
+/** one element of a draft; the note refers to `elements[i]` as `[i + 1]` */
+interface Picked {
+	anchor: Anchor;
+	/** undefined only for a draft's sole element, which then can't be sent */
 	selection: Selection | undefined;
 	screenshot: Promise<string | undefined>;
+}
+
+interface Draft {
+	elements: Picked[];
 	sending: boolean;
 	/** closed by the user; a send still waiting on its screenshot posts nothing */
 	cancelled: boolean;
 	error?: string | undefined;
+	/** its pick's id once posted; the draft's own tags stand in for the pick's until it closes */
+	sentAs?: string | undefined;
 }
 
 interface Sent {
+	/** element 1's, where the marker sits */
 	anchor: Anchor;
 	/** the picked component, naming the marker's dismiss button */
 	name: string;
+	/** elements 2 onward, tagged with their numbers until the pick is done */
+	others: Anchor[];
+}
+
+/** an element's number on the page */
+interface Tag {
+	root: HTMLElement;
+	anchor: Anchor;
 }
 
 interface Marker {
@@ -95,6 +116,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 	});
 	// in the tree while empty: a live region that appears already holding text goes unannounced
 	const notice = el("p", { class: "notice", id: "notice", role: "status" });
+	const list = el("ol", { class: "elements", "aria-label": "Elements" });
 	const cancel = el("button", { type: "button" }, "Cancel");
 	const send = el("button", { type: "submit" }, "Send to Claude");
 	composer.append(
@@ -102,6 +124,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 		target,
 		note,
 		notice,
+		list,
 		el("div", { class: "actions" }, cancel, send),
 	);
 	layer.append(composer);
@@ -149,6 +172,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 	}
 
 	const markers = new Map<string, Marker>();
+	const tags = new Map<string, Tag>();
 	const sent = new Map<string, Sent>();
 	// the state each dismissed marker last showed; the next reply to its pick brings it back
 	const dismissed = new Map<string, PickState>();
@@ -159,13 +183,23 @@ export function mountOverlay(controller: PickController): PickTarget {
 
 	function renderComposer(): void {
 		const disabled =
-			!draft || draft.sending || !draft.selection || !controller.canSend;
+			!draft ||
+			draft.sending ||
+			!draft.elements[0]?.selection ||
+			!controller.canSend;
+		const sending = draft?.sending ?? false;
 		// a disabled button drops focus to <body>, where Escape and Cmd+Enter no longer reach the box
-		if (disabled && root.activeElement === send) note.focus();
+		if (
+			(disabled && root.activeElement === send) ||
+			(sending && list.contains(root.activeElement))
+		)
+			note.focus();
 		send.disabled = disabled;
+		for (const remove of list.querySelectorAll("button"))
+			remove.disabled = sending;
 		setText(
 			notice,
-			(draft && !draft.selection ? NO_SOURCE : undefined) ??
+			(draft && !draft.elements[0]?.selection ? NO_SOURCE : undefined) ??
 				controller.notice ??
 				draft?.error ??
 				"",
@@ -189,6 +223,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 				marker.badge.dataset.badge = state.badge;
 			setText(marker.bubble, state.message ?? "");
 		}
+		renderTags();
 		// new text resizes a panel
 		schedule();
 	}
@@ -218,6 +253,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 			// its element is gone: a later reply would have nowhere to show
 			if (!anchor.element.isConnected) sent.delete(pickId);
 			else if (state) dismissed.set(pickId, state);
+			renderTags();
 		});
 		layer.append(markerRoot);
 		const marker = {
@@ -259,13 +295,19 @@ export function mountOverlay(controller: PickController): PickTarget {
 	}
 
 	function placeAll(): void {
-		const panels: [HTMLElement, Anchor][] = [...markers.values()].map(
-			(marker) => [marker.root, marker.anchor],
-		);
-		if (draftAnchor) panels.push([composer, draftAnchor]);
+		type Placed = [HTMLElement, Anchor, typeof spotFor];
+		const panels = [
+			...[...markers.values()].map(
+				(marker): Placed => [marker.root, marker.anchor, spotFor],
+			),
+			...[...tags.values()].map(
+				(tag): Placed => [tag.root, tag.anchor, tagSpot],
+			),
+		];
+		if (draftAnchor) panels.push([composer, draftAnchor, spotFor]);
 		// every read before any write: interleaved, each panel forces its own layout
-		const spots = panels.map(([panel, anchor]) =>
-			spotFor(panel, anchor.rect()),
+		const spots = panels.map(([panel, anchor, spot]) =>
+			spot(panel, anchor.rect()),
 		);
 		panels.forEach(([panel], index) => {
 			panel.style.transform = spots[index] ?? "";
@@ -273,7 +315,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 	}
 
 	function pageMoved(): void {
-		if (markers.size > 0 || draftAnchor) schedule();
+		if (markers.size > 0 || tags.size > 0 || draftAnchor) schedule();
 	}
 	document.addEventListener("scroll", pageMoved, {
 		capture: true,
@@ -298,6 +340,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 			giveFocusBack(returnFocus, picked);
 		returnFocus = undefined;
 		composer.hidden = true;
+		renderTags();
 		if (modal) {
 			modal = undefined;
 			attach();
@@ -306,26 +349,30 @@ export function mountOverlay(controller: PickController): PickTarget {
 
 	async function submit(): Promise<void> {
 		const current = draft;
-		if (!current?.selection || send.disabled) return;
+		if (!current || send.disabled) return;
 		current.sending = true;
 		current.error = undefined;
 		renderComposer();
 		const text = note.value;
-		const screenshot = await current.screenshot;
+		const elements = await Promise.all(
+			current.elements.map(async ({ selection, screenshot }) =>
+				selection ? { selection, screenshot: await screenshot } : undefined,
+			),
+		);
 		if (current.cancelled) return;
+		const [first] = current.elements;
+		const sendable = elements.filter((element) => element !== undefined);
+		if (!first || sendable.length !== elements.length) return;
 		const pickId = newPickId();
 		const pick: Sent = {
-			anchor: new Anchor(current.element),
-			name: current.selection.component,
+			anchor: first.anchor,
+			name: sendable[0]?.selection.component ?? "",
+			others: current.elements.slice(1).map(({ anchor }) => anchor),
 		};
 		sent.set(pickId, pick);
+		current.sentAs = pickId;
 		const outcome = await controller.send(
-			buildPick({
-				pickId,
-				note: text,
-				selection: current.selection,
-				screenshot,
-			}),
+			buildPick({ pickId, note: text, elements: sendable }),
 		);
 		current.sending = false;
 		if (!outcome.ok) {
@@ -383,34 +430,166 @@ export function mountOverlay(controller: PickController): PickTarget {
 					: undefined;
 		}
 		draft = next;
-		draftAnchor = new Anchor(next.element);
-		modal = next.element.closest(MODAL) ?? undefined;
+		const [first] = next.elements;
+		draftAnchor = first?.anchor;
+		modal = first?.anchor.element.closest(MODAL) ?? undefined;
 		// before focusing: moving the host blurs whatever is focused inside it
 		attach();
-		target.textContent = next.selection
-			? `${next.selection.component} · ${location(next.selection)}`
-			: next.element.localName;
+		target.textContent = first?.selection
+			? `${first.selection.component} · ${location(first.selection)}`
+			: (first?.anchor.element.localName ?? "");
 		note.value = text;
 		composer.hidden = false;
+		renderList();
 		renderComposer();
-		composer.style.transform = spotFor(composer, draftAnchor.rect());
+		if (draftAnchor)
+			composer.style.transform = spotFor(composer, draftAnchor.rect());
 		schedule();
 		note.focus();
 	}
 
 	function pick(element: Element, selection: Selection | undefined): void {
+		// a draft whose sole element has no source is replaced instead
+		if (draft && !draft.sending && draft.elements[0]?.selection) {
+			add(draft, element, selection);
+			return;
+		}
 		// an unsent note carries over to the new pick; one already sending went with its pick
 		const text = draft && !draft.sending ? note.value : "";
 		open(
 			{
-				element,
-				selection,
-				screenshot: selection ? capture(element) : Promise.resolve(undefined),
+				elements: [newPicked(element, selection)],
 				sending: false,
 				cancelled: false,
 			},
 			text,
 		);
+	}
+
+	function add(
+		current: Draft,
+		element: Element,
+		selection: Selection | undefined,
+	): void {
+		const known = current.elements.findIndex(
+			(picked) => picked.anchor.element === element,
+		);
+		if (known >= 0) {
+			current.error = undefined;
+			renderComposer();
+			insertAtCursor(note, `[${known + 1}]`);
+			note.focus();
+			return;
+		}
+		if (current.elements.length >= MAX_PICK_ELEMENTS) {
+			refuse(current, TOO_MANY);
+			return;
+		}
+		if (!selection) {
+			refuse(current, NO_SOURCE);
+			return;
+		}
+		current.error = undefined;
+		current.elements.push(newPicked(element, selection));
+		// picked in a dialog opened since: its focus trap would pull focus out of a box left outside
+		const dialog = modal ? undefined : element.closest(MODAL);
+		if (dialog) {
+			modal = dialog;
+			attach();
+		}
+		renderComposer();
+		insertAtCursor(note, `[${current.elements.length}]`);
+		renderList();
+		note.focus();
+	}
+
+	function refuse(current: Draft, reason: string): void {
+		current.error = reason;
+		renderComposer();
+		note.focus();
+	}
+
+	function remove(current: Draft, index: number): void {
+		current.elements.splice(index, 1);
+		note.value = unmark(note.value, index + 1, current.elements.length + 1);
+		renderList();
+		// its button is gone with its row
+		note.focus();
+	}
+	list.addEventListener("click", (event) => {
+		const row = event.target instanceof Element && event.target.closest("li");
+		if (!draft || !row || !event.target.closest(".remove")) return;
+		remove(draft, [...list.children].indexOf(row));
+	});
+
+	function renderTags(): void {
+		const wanted = new Map<string, { anchor: Anchor; text: string }>();
+		draft?.elements.forEach(({ anchor }, index) => {
+			wanted.set(`draft ${index}`, { anchor, text: `[${index + 1}]` });
+		});
+		for (const [pickId, { others }] of sent) {
+			const state = controller.picks.get(pickId);
+			if (!state || state.badge === "done" || !markers.has(pickId)) continue;
+			if (pickId === draft?.sentAs) continue;
+			others.forEach((anchor, index) => {
+				wanted.set(`${pickId} ${index}`, { anchor, text: `[${index + 2}]` });
+			});
+		}
+		for (const [key, tag] of tags) {
+			if (wanted.has(key)) continue;
+			tag.root.remove();
+			tags.delete(key);
+		}
+		for (const [key, { anchor, text }] of wanted) {
+			const known = tags.get(key);
+			const tag = known ?? addTag(key, anchor);
+			tag.anchor = anchor;
+			setText(tag.root, text);
+			// placed now, not next frame: a new tag would flash at the corner first
+			if (!known) tag.root.style.transform = tagSpot(tag.root, anchor.rect());
+		}
+		schedule();
+	}
+
+	function addTag(key: string, anchor: Anchor): Tag {
+		// the note's element list names them; on the page they're only a visual cue
+		const tag = {
+			root: el("span", { class: "tag", "aria-hidden": "true" }),
+			anchor,
+		};
+		layer.append(tag.root);
+		tags.set(key, tag);
+		return tag;
+	}
+
+	function renderList(): void {
+		list.replaceChildren(
+			...(draft?.elements ?? []).map(({ selection, anchor }, index) =>
+				el(
+					"li",
+					{},
+					el(
+						"span",
+						{ class: "element-name" },
+						rowName(index, selection, anchor),
+					),
+					...(index === 0
+						? []
+						: [
+								el(
+									"button",
+									{
+										type: "button",
+										class: "remove",
+										"aria-label": `Remove ${rowName(index, selection, anchor)}`,
+									},
+									"×",
+								),
+							]),
+				),
+			),
+		);
+		renderTags();
 	}
 
 	return {
@@ -421,16 +600,69 @@ export function mountOverlay(controller: PickController): PickTarget {
 	};
 }
 
-/** a png data url, or undefined when the capture fails or runs past its deadline */
+function newPicked(element: Element, selection: Selection | undefined): Picked {
+	return {
+		anchor: new Anchor(element),
+		selection,
+		screenshot: selection ? capture(element) : Promise.resolve(undefined),
+	};
+}
+
+function rowName(
+	index: number,
+	selection: Selection | undefined,
+	anchor: Anchor,
+): string {
+	return `[${index + 1}] ${selection?.component ?? anchor.element.localName}`;
+}
+
+/** `note` without marker `[removed]`, and each later marker up to `[count]` one lower */
+function unmark(note: string, removed: number, count: number): string {
+	const marker = `\\[${removed}\\]`;
+	return note
+		.replace(new RegExp(` ${marker}|${marker} ?`, "g"), "")
+		.replace(/\[(\d)\]/g, (text, digit: string) => {
+			const number = Number(digit);
+			return number > removed && number <= count ? `[${number - 1}]` : text;
+		});
+}
+
+/** `text` over the selection, with a space either side where a word would touch it; the cursor lands right after `text` */
+function insertAtCursor(field: HTMLTextAreaElement, text: string): void {
+	const { value, selectionStart: start, selectionEnd: end } = field;
+	const before = start > 0 && /\S/.test(value[start - 1] ?? "") ? " " : "";
+	const after = /[\p{L}\p{N}[]/u.test(value[end] ?? "") ? " " : "";
+	field.setRangeText(`${before}${text}${after}`, start, end);
+	const caret = start + before.length + text.length;
+	field.setSelectionRange(caret, caret);
+}
+
+/**
+ * a png data url, or undefined when the capture fails or runs past its deadline.
+ * one over its budget is taken once more, scaled down by the area it overshot by
+ */
 function capture(element: Element): Promise<string | undefined> {
 	const deadline = new Promise<undefined>((resolve) =>
 		setTimeout(resolve, SCREENSHOT_DEADLINE_MS),
 	);
-	const shot = domToPng(element, {
+	const shot = shoot(element, 1).then((first) => {
+		const chars = first ? base64Of(first).length : 0;
+		if (!first || chars <= MAX_SCREENSHOT_CHARS) return first;
+		// png bytes grow about with pixel count, the square of the scale
+		return shoot(
+			element,
+			RETRY_MARGIN * Math.sqrt(MAX_SCREENSHOT_CHARS / chars),
+		);
+	});
+	return Promise.race([shot, deadline]);
+}
+
+function shoot(element: Element, scale: number): Promise<string | undefined> {
+	return domToPng(element, {
+		scale,
 		timeout: ASSET_TIMEOUT_MS,
 		maximumCanvasSize: MAX_CANVAS_SIDE,
 	}).catch(() => undefined);
-	return Promise.race([shot, deadline]);
 }
 
 function location({ file, line, column }: Selection): string {
@@ -449,6 +681,13 @@ function spotFor(panel: HTMLElement, rect: DOMRect): string {
 		Math.max(GAP, rect.left),
 		Math.max(GAP, innerWidth - width - GAP),
 	);
+	return `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+
+/** the transform putting `tag` over the element's top-left corner, on screen */
+function tagSpot(tag: HTMLElement, rect: DOMRect): string {
+	const left = Math.min(Math.max(0, rect.left), innerWidth - tag.offsetWidth);
+	const top = Math.min(Math.max(0, rect.top), innerHeight - tag.offsetHeight);
 	return `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
 }
 

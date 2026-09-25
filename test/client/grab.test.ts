@@ -131,3 +131,17 @@ test("react-grab's copy goes ahead: nothing intercepts the select or rewrites th
 		await plugin.hooks?.onCopySuccess?.([document.createElement("div")], "x"),
 	).toBeUndefined();
 });
+
+test("each click that copies one element reaches the overlay, in click order, so an open note can add it", async () => {
+	const { plugin, target } = joinGrab();
+	const [a, b] = [document.createElement("div"), document.createElement("div")];
+
+	for (const element of [a, b]) {
+		await plugin.hooks?.onActivate?.();
+		await plugin.hooks?.onCopySuccess?.([element], "<div></div>");
+		await plugin.hooks?.onDeactivate?.();
+	}
+
+	await vi.waitFor(() => expect(target.pick).toHaveBeenCalledTimes(2));
+	expect(target.pick.mock.calls.map(([element]) => element)).toEqual([a, b]);
+});

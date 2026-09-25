@@ -19,8 +19,7 @@ test("a pick built from a selection passes the helper's schema", () => {
 	const pick = buildPick({
 		pickId: newPickId(),
 		note: "make the price bold",
-		selection,
-		screenshot: PNG_DATA_URL,
+		elements: [{ selection, screenshot: PNG_DATA_URL }],
 	});
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 	expect(pick).toMatchObject({
@@ -40,21 +39,24 @@ test("the screenshot is plain base64, without the data url prefix", () => {
 	const pick = buildPick({
 		pickId: "p1",
 		note: "",
-		selection,
-		screenshot: PNG_DATA_URL,
+		elements: [{ selection, screenshot: PNG_DATA_URL }],
 	});
 	expect(pick.elements[0]?.screenshot).toBe("iVBORw0KGgo=");
 });
 
 test("no screenshot leaves the field out", () => {
-	const pick = buildPick({ pickId: "p1", note: "", selection });
+	const pick = buildPick({ pickId: "p1", note: "", elements: [{ selection }] });
 	expect(pick.elements[0]).not.toHaveProperty("screenshot");
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });
 
 test("an unknown column leaves the field out", () => {
 	const { column: _, ...withoutColumn } = selection;
-	const pick = buildPick({ pickId: "p1", note: "", selection: withoutColumn });
+	const pick = buildPick({
+		pickId: "p1",
+		note: "",
+		elements: [{ selection: withoutColumn }],
+	});
 	expect(pick.elements[0]).not.toHaveProperty("column");
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });
@@ -70,8 +72,7 @@ test("a screenshot too big for the dev server's body limit is dropped, not sent"
 	const pick = buildPick({
 		pickId: "p1",
 		note: "",
-		selection,
-		screenshot: huge,
+		elements: [{ selection, screenshot: huge }],
 	});
 	expect(pick.elements[0]).not.toHaveProperty("screenshot");
 });
@@ -80,7 +81,11 @@ test.each([
 	["empty, as a zero-size or oversize canvas renders", "data:,"],
 	["not a png", "data:image/jpeg;base64,/9j/4AAQSkZJRg=="],
 ])("a screenshot that's %s is dropped, not sent", (_, screenshot) => {
-	const pick = buildPick({ pickId: "p1", note: "", selection, screenshot });
+	const pick = buildPick({
+		pickId: "p1",
+		note: "",
+		elements: [{ selection, screenshot }],
+	});
 	expect(pick.elements[0]).not.toHaveProperty("screenshot");
 	expect(pickSchema.safeParse(pick).success).toBe(true);
 });
@@ -100,10 +105,58 @@ test("the posted pick carries the module url and react-grab's column counted fro
 	});
 	if (!picked) throw new Error("no selection");
 
-	const pick = buildPick({ pickId: "p1", note: "", selection: picked });
+	const pick = buildPick({
+		pickId: "p1",
+		note: "",
+		elements: [{ selection: picked }],
+	});
 
 	expect(pick.elements).toMatchObject([
 		{ file: "price-card.tsx", column: 1, moduleUrl },
 	]);
 	expect(pickSchema.safeParse(pick).success).toBe(true);
+});
+
+test("several elements go out in marker order, each with its own screenshot, and pass the helper's schema", () => {
+	const header = { ...selection, component: "Header", line: 7 };
+	const footer = { ...selection, component: "Footer", line: 99 };
+
+	const pick = buildPick({
+		pickId: "p1",
+		note: "put [3] beside [1], under [2]",
+		elements: [
+			{ selection, screenshot: PNG_DATA_URL },
+			{ selection: header },
+			{
+				selection: footer,
+				screenshot: "data:image/png;base64,iVBORw0KGgoAAAA=",
+			},
+		],
+	});
+
+	expect(pickSchema.safeParse(pick).success).toBe(true);
+	expect(pick.elements).toMatchObject([
+		{ component: "PriceCard", screenshot: "iVBORw0KGgo=" },
+		{ component: "Header", line: 7 },
+		{ component: "Footer", line: 99, screenshot: "iVBORw0KGgoAAAA=" },
+	]);
+	expect(pick.elements[1]).not.toHaveProperty("screenshot");
+});
+
+test("each element's screenshot is held to its own budget", () => {
+	const atBudget = `data:image/png;base64,${"iVBORw0KGgo".padEnd(MAX_SCREENSHOT_CHARS, "A")}`;
+
+	const pick = buildPick({
+		pickId: "p1",
+		note: "",
+		elements: [
+			{ selection, screenshot: atBudget },
+			{ selection, screenshot: atBudget },
+		],
+	});
+
+	expect(pick.elements.map((element) => element.screenshot?.length)).toEqual([
+		MAX_SCREENSHOT_CHARS,
+		MAX_SCREENSHOT_CHARS,
+	]);
 });
