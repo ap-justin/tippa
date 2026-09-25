@@ -90,3 +90,44 @@ test("the overlay hears when react-grab starts and stops picking", async () => {
 	await plugin.hooks?.onDeactivate?.();
 	expect(target.grabbing).toHaveBeenLastCalledWith(false);
 });
+
+test("a click that copies one element opens the note on it once react-grab has let go of focus", async () => {
+	const { plugin, target } = joinGrab();
+	const element = document.createElement("div");
+
+	await plugin.hooks?.onActivate?.();
+	await plugin.hooks?.onCopySuccess?.([element], "<div>$12</div>");
+	await new Promise((resolve) => setTimeout(resolve));
+	// react-grab restores its own focus inside deactivate; the note's focus has to come after
+	expect(target.pick).not.toHaveBeenCalled();
+
+	await plugin.hooks?.onDeactivate?.();
+
+	await vi.waitFor(() =>
+		expect(target.pick).toHaveBeenCalledWith(
+			element,
+			expect.objectContaining({ file: "price-card.tsx", line: 23 }),
+		),
+	);
+});
+
+test("a drag that copies several elements doesn't open the note", async () => {
+	const { plugin, target } = joinGrab();
+	const [a, b] = [document.createElement("div"), document.createElement("div")];
+
+	await plugin.hooks?.onActivate?.();
+	await plugin.hooks?.onCopySuccess?.([a, b], "<div></div><div></div>");
+	await plugin.hooks?.onDeactivate?.();
+
+	expect(target.pick).not.toHaveBeenCalled();
+});
+
+test("react-grab's copy goes ahead: nothing intercepts the select or rewrites the clipboard", async () => {
+	const { plugin } = joinGrab();
+
+	expect(plugin.hooks?.onElementSelect).toBeUndefined();
+	expect(plugin.hooks?.transformCopyContent).toBeUndefined();
+	expect(
+		await plugin.hooks?.onCopySuccess?.([document.createElement("div")], "x"),
+	).toBeUndefined();
+});

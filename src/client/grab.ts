@@ -19,20 +19,58 @@ export interface PickTarget {
 }
 
 /**
- * adds "Send to Claude" to react-grab's menu. joins the page's react-grab when it
- * already runs one; otherwise starts one and publishes it the way react-grab's
- * entry does, so an app that imports react-grab later reuses it instead of
- * drawing a second picker.
+ * opens the note on a clicked element as react-grab copies it, and adds "Send to
+ * Claude" to react-grab's menu. joins the page's react-grab when it already runs
+ * one; otherwise starts one and publishes it the way react-grab's entry does, so
+ * an app that imports react-grab later reuses it instead of drawing a second picker.
  */
 export function startGrab(key: string | undefined, target: PickTarget): void {
 	const grab = window.__REACT_GRAB__ ?? publish(init({ telemetry: false }));
 	// the plugin's `key` option was set on purpose, so it wins over the app's own react-grab config
 	if (key) grab.setOptions({ activationKey: key });
+
+	async function resolve(
+		element: Element,
+		componentName?: string,
+		tagName?: string,
+	): Promise<Selection | undefined> {
+		const [source, html] = await Promise.all([
+			grab.getSource(element),
+			formatElementInfo(element),
+		]);
+		return toSelection({
+			source,
+			moduleUrl: moduleUrlOf(element),
+			fallbackName: componentName ?? grab.getDisplayName(element) ?? undefined,
+			tagName: tagName ?? element.localName,
+			html,
+		});
+	}
+
+	// a copied element waits for deactivate: react-grab gives focus back there, after the copy
+	let copied:
+		| { element: Element; selection: Promise<Selection | undefined> }
+		| undefined;
+
 	grab.registerPlugin({
 		name: "ui-pick",
 		hooks: {
 			onActivate: () => target.grabbing(true),
-			onDeactivate: () => target.grabbing(false),
+			onDeactivate: async () => {
+				target.grabbing(false);
+				const pending = copied;
+				copied = undefined;
+				if (pending) target.pick(pending.element, await pending.selection);
+			},
+			// not onElementSelect: a truthy return there replaces react-grab's copy.
+			// one element, as the menu action; a drag's copy opens nothing
+			onCopySuccess: (elements) => {
+				const [element] = elements;
+				copied =
+					element && elements.length === 1
+						? { element, selection: resolve(element) }
+						: undefined;
+			},
 		},
 		actions: [
 			{
@@ -44,21 +82,7 @@ export function startGrab(key: string | undefined, target: PickTarget): void {
 				async onAction({ element, componentName, tagName, cleanup }) {
 					// react-grab's frozen styles must be gone before the screenshot
 					cleanup();
-					const [source, html] = await Promise.all([
-						grab.getSource(element),
-						formatElementInfo(element),
-					]);
-					target.pick(
-						element,
-						toSelection({
-							source,
-							moduleUrl: moduleUrlOf(element),
-							fallbackName:
-								componentName ?? grab.getDisplayName(element) ?? undefined,
-							tagName: tagName ?? element.localName,
-							html,
-						}),
-					);
+					target.pick(element, await resolve(element, componentName, tagName));
 				},
 			},
 		],

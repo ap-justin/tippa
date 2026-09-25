@@ -70,8 +70,8 @@ and prints the line again when the state changes.
 
 ## Picking
 
-1. Hover an element and activate react-grab: by default press **⌘C** (macOS) or **Ctrl+C**, or use your `key`.
-2. In react-grab's menu for that element, choose **Send to Claude**.
+1. Activate react-grab: by default press **⌘C** (macOS) or **Ctrl+C**, or use your `key`.
+2. Click an element. react-grab copies it as usual, and the note box opens on it with the cursor in the note. **Send to Claude** in react-grab's menu for an element opens the same box without copying.
 3. Type what should change and press **⌘/Ctrl+Enter**. Press **Esc** to cancel.
 
 The element gets a status badge: sending, sent, working, done, or question. Claude's reply appears in a bubble beside the element. You can keep picking while Claude works: picks queue and Claude takes them in order. If Claude isn't connected, the note box says "Claude isn't connected" and nothing is sent.
