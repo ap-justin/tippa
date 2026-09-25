@@ -14,4 +14,4 @@ A slice reaching a stack no seat above covers is a question for the user, naming
 ## Gotchas
 - **MCP SDK stays on v1** — Claude Code doesn't register a channel from a server on protocol 2026-07-28 (SDK v2) ← code.claude.com/docs/en/mcp, channels section
 - **`dist/client` is served raw** by the consumer's Vite over `/@fs/`, so it carries no bare imports: react-grab and modern-screenshot are devDependencies bundled in (`tsdown.config.ts`), and client code imports zod as types only (`src/protocol.ts`). Nothing tests this.
-- **Full suite is cheap** — ~20 s over 8 node-only files, no browser; slowest is `test/claude-session.test.ts` (~10 s, real timers). Run `pnpm check` whole. ← vitest results.json
+- **Full suite is cheap** — ~11 s over 13 files, node + happy-dom, no browser. Run `pnpm check` whole. ← `pnpm check` 2026-09-26
