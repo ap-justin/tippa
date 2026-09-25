@@ -38,9 +38,6 @@ const INSTRUCTIONS = [
 	'Call the reply tool with the pick_id: status "working" when you start, "done" with a one-line summary after the edit, "question" when you need the developer\'s answer.',
 ].join("\n");
 
-const INERT_INSTRUCTIONS =
-	"ui-pick is inactive in this session: Claude Code was started without --dangerously-load-development-channels server:ui-pick, so picks from the browser can't reach it. To use ui-pick, restart claude with that flag.";
-
 export interface ChannelOptions {
 	/** project root the discovery file is written under */
 	cwd: string;
@@ -233,15 +230,16 @@ export async function startChannel({
 }
 
 /**
- * for a claude that would drop channel events: an mcp server that says why, with no
- * listener and no discovery file, so it can't take picks meant for a session that has the flag
+ * for a claude that would drop channel events: an mcp server whose instructions give `reason`,
+ * with no listener and no discovery file, so it can't take picks meant for a session that has the flag
  */
 export async function startInertChannel(
 	transport: Transport,
+	reason: string,
 ): Promise<Channel> {
 	const mcp = new McpServer(
 		{ name: "ui-pick", version: "0.0.0" },
-		{ instructions: INERT_INSTRUCTIONS },
+		{ instructions: reason },
 	);
 	await mcp.connect(transport);
 	return { close: () => mcp.close(), releaseSync() {} };

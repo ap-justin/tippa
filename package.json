@@ -25,7 +25,7 @@
 		"typecheck": "tsc -b",
 		"lint": "biome check .",
 		"test": "vitest run",
-		"check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+		"check": "pnpm typecheck && pnpm lint && pnpm build && pnpm test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.14",

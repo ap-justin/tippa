@@ -17,10 +17,9 @@ const channel = (await isLoadedAsChannel(SERVER_NAME))
 	: await startInert();
 
 async function startInert() {
-	console.error(
-		`ui-pick: inactive; picks reach claude only when it's started with --dangerously-load-development-channels server:${SERVER_NAME}`,
-	);
-	return startInertChannel(transport);
+	const reason = `ui-pick is inactive: picks reach claude only when it's started with --dangerously-load-development-channels server:${SERVER_NAME}`;
+	console.error(reason);
+	return startInertChannel(transport, reason);
 }
 
 async function shutdown(): Promise<void> {
