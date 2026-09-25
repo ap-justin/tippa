@@ -4,7 +4,8 @@ import { startChannel } from "./channel.ts";
 
 // stdout carries the mcp protocol; logs go to stderr
 const channel = await startChannel({
-	cwd: process.cwd(),
+	// claude code sets CLAUDE_PROJECT_DIR for the mcp servers it spawns
+	cwd: process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
 	transport: new StdioServerTransport(),
 });
 

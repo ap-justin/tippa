@@ -39,3 +39,26 @@ test.each([
 		"ENOENT",
 	);
 });
+
+test("the helper writes its discovery file under CLAUDE_PROJECT_DIR when claude code sets it", async () => {
+	const projectDir = await mkdtemp(join(tmpdir(), "ui-pick-project-"));
+	const nested = await mkdtemp(join(tmpdir(), "ui-pick-cwd-"));
+	const other = spawn(process.execPath, [BIN], {
+		cwd: nested,
+		env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+		stdio: ["pipe", "pipe", "inherit"],
+	});
+	try {
+		await vi.waitFor(
+			() => access(join(projectDir, ".ui-pick", "channel.json")),
+			{ timeout: 3000 },
+		);
+		await expect(
+			access(join(nested, ".ui-pick", "channel.json")),
+		).rejects.toThrow("ENOENT");
+	} finally {
+		other.kill("SIGKILL");
+		await rm(projectDir, { recursive: true, force: true });
+		await rm(nested, { recursive: true, force: true });
+	}
+});
