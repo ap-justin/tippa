@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Connect, Logger, Plugin } from "vite";
+import type { Connect, DevEnvironment, Logger, Plugin } from "vite";
 import { z } from "zod";
 import {
 	type AgentAdapter,
@@ -89,7 +89,13 @@ export function uiPick(options: UiPickOptions): Plugin {
 				client.send(STATUS_EVENT, { status: agentConnection.status }),
 			);
 			server.middlewares.use(
-				pickEndpoint({ token, root, agent: agentConnection, logger }),
+				pickEndpoint({
+					token,
+					root,
+					environment: client,
+					agent: agentConnection,
+					logger,
+				}),
 			);
 		},
 		async buildEnd() {
@@ -159,11 +165,13 @@ function validate(options: UiPickOptions): void {
 function pickEndpoint({
 	token,
 	root,
+	environment,
 	agent,
 	logger,
 }: {
 	token: string;
 	root: string;
+	environment: DevEnvironment;
 	agent: AgentConnection;
 	logger: Logger;
 }): Connect.NextHandleFunction {
@@ -203,14 +211,30 @@ function pickEndpoint({
 				message: z.prettifyError(parsed.error),
 			});
 		}
+		const { moduleUrl, ...pick } = parsed.data;
+		const moduleFile =
+			moduleUrl === undefined
+				? undefined
+				: await moduleFilePath(moduleUrl, {
+						host: req.headers.host,
+						root,
+						environment,
+					});
+		if (moduleUrl !== undefined && moduleFile === undefined) {
+			return sendJson(res, 400, {
+				error: "invalid_pick",
+				message: "moduleUrl is not a module of this dev server",
+			});
+		}
+		const file =
+			moduleFile === undefined
+				? viteUrlPath(pick.file, root)
+				: mapSourcePath(pick.file, moduleFile);
 		if (agent.status !== "connected") {
 			return sendJson(res, 503, { error: "not_connected" });
 		}
 		try {
-			await agent.send({
-				...parsed.data,
-				file: sourcePath(parsed.data.file, root),
-			});
+			await agent.send({ ...pick, file });
 		} catch (error) {
 			if (error instanceof AgentNotConnectedError) {
 				return sendJson(res, 503, { error: "not_connected" });
@@ -232,14 +256,59 @@ function pickEndpoint({
 }
 
 /**
- * react-grab reports vite urls: root-relative, or `/@fs/<absolute>` outside the root.
+ * a vite url as a file path: root-relative, or `/@fs/<absolute>` outside the root.
  * whoever reads the pick runs elsewhere, so it gets the file's absolute path
  */
-function sourcePath(url: string, root: string): string {
+function viteUrlPath(url: string, root: string): string {
 	const [path = url] = url.split(/[?#]/);
+	return servedPathFile(path, root);
+}
+
+function servedPathFile(path: string, root: string): string {
 	return path.startsWith(FS_PREFIX)
 		? path.slice(FS_PREFIX.length - 1)
 		: join(root, path);
+}
+
+/**
+ * the file behind a module url the page loaded, or undefined for another origin,
+ * an undecodable path or one climbing out through an encoded `..`
+ */
+async function moduleFilePath(
+	moduleUrl: string,
+	{
+		host,
+		root,
+		environment,
+	}: { host: string | undefined; root: string; environment: DevEnvironment },
+): Promise<string | undefined> {
+	let path: string;
+	try {
+		// the scheme comes from the url itself: the dev server may serve https
+		const url = new URL(moduleUrl, `http://${host}`);
+		const isPageOrigin =
+			url.host === host &&
+			(url.protocol === "http:" || url.protocol === "https:");
+		if (!isPageOrigin) return undefined;
+		path = decodeURIComponent(url.pathname);
+	} catch {
+		return undefined;
+	}
+	if (path.split("/").includes("..")) return undefined;
+	// the graph keys source modules by path alone; with `?t=` the lookup misses
+	const known = await environment.moduleGraph
+		.getModuleByUrl(path)
+		.catch(() => undefined);
+	return known?.file ?? servedPathFile(path, root);
+}
+
+/** react-grab passes the map's raw `sources` entry, which vite writes relative to the module's dir */
+function mapSourcePath(source: string, moduleFile: string): string {
+	let path = source;
+	try {
+		path = decodeURIComponent(source);
+	} catch {}
+	return isAbsolute(path) ? path : resolve(dirname(moduleFile), path);
 }
 
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);

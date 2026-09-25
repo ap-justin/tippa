@@ -4,6 +4,8 @@ import { MAX_SCREENSHOT_CHARS } from "./protocol.ts";
 /** the dev server keeps this many leading chars of a pick's html */
 export const MAX_HTML_CHARS = 4000;
 
+const MAX_MODULE_URL_CHARS = 2048;
+
 // a `<channel>` tag attribute and the key claude's replies are routed by
 export const pickIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 
@@ -21,10 +23,19 @@ export const pickRequestSchema = z.object({
 	pickId: pickIdSchema,
 	note: z.string(),
 	component: z.string(),
-	/** as the client posts it, a vite url; as an agent receives it, an absolute path */
+	/**
+	 * as the client posts it, react-grab's source: the sourcemap's `sources` entry, relative to
+	 * {@link moduleUrl}'s directory; as an agent receives it, an absolute path
+	 */
 	file: z.string(),
 	line: z.number().int().positive(),
 	column: z.number().int().positive().optional(),
+	/**
+	 * the served module the component came from, as the browser loaded it: an absolute
+	 * same-origin url or a root-relative path, e.g. `http://localhost:5173/src/ui/Button.tsx?t=1`
+	 * or `/@fs/abs/Button.tsx`; without it, `file` is read as a vite url
+	 */
+	moduleUrl: z.string().max(MAX_MODULE_URL_CHARS).optional(),
 	/** the dev server keeps the first {@link MAX_HTML_CHARS} */
 	html: z.string(),
 	/** base64 png of the picked element */

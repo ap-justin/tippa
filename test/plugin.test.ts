@@ -14,7 +14,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Notification } from "@modelcontextprotocol/sdk/types.js";
@@ -425,6 +425,160 @@ test.each([
 	expect(sent.map((forwarded) => forwarded.file)).toEqual([await expected()]);
 });
 
+/** a module served as the browser loads it, and what react-grab reads from its inline map */
+async function serveModule(origin: string, url: string, file: string) {
+	await mkdir(dirname(file), { recursive: true });
+	await writeFile(file, "export const Button = (n: number): number =>\n\tn;\n");
+	const code = await getText(`${origin}${url}`);
+	const map = JSON.parse(
+		Buffer.from(
+			code.match(/sourceMappingURL=data:application\/json;base64,(\S+)/)?.[1] ??
+				"",
+			"base64",
+		).toString(),
+	) as { sources: [string] };
+	return { sourceFile: map.sources[0] };
+}
+
+test("a nested module's map-relative source resolves against the module's own dir", async () => {
+	const sent: PickRequest[] = [];
+	const origin = await serve(recordingAgent(sent));
+	const { config } = await loadClient(origin);
+	const { sourceFile } = await serveModule(
+		origin,
+		"/src/ui/Button.tsx",
+		join(root, "src", "ui", "Button.tsx"),
+	);
+
+	const res = await postPick(
+		origin,
+		pick({
+			file: sourceFile,
+			moduleUrl: `${origin}/src/ui/Button.tsx?t=123`,
+		}),
+		{ "x-ui-pick-token": config.token },
+	);
+
+	expect(res.status).toBe(202);
+	expect(sent.map((forwarded) => forwarded.file)).toEqual([
+		join(await realpath(root), "src", "ui", "Button.tsx"),
+	]);
+});
+
+test("an absolute source passes through unchanged", async () => {
+	const sent: PickRequest[] = [];
+	const origin = await serve(recordingAgent(sent));
+	const { config } = await loadClient(origin);
+	await serveModule(
+		origin,
+		"/src/ui/Button.tsx",
+		join(root, "src", "ui", "Button.tsx"),
+	);
+
+	const res = await postPick(
+		origin,
+		pick({
+			file: "/opt/shared/Button.tsx",
+			moduleUrl: "/src/ui/Button.tsx",
+		}),
+		{ "x-ui-pick-token": config.token },
+	);
+
+	expect(res.status).toBe(202);
+	expect(sent.map((forwarded) => forwarded.file)).toEqual([
+		"/opt/shared/Button.tsx",
+	]);
+});
+
+test.each([
+	["a raw source", (source: string) => source],
+	["an encoded source", encodeURIComponent],
+])(
+	"a percent-encoded module url with %s resolves to the decoded file path",
+	async (_, encodeSource) => {
+		const sent: PickRequest[] = [];
+		const origin = await serve(recordingAgent(sent));
+		const { config } = await loadClient(origin);
+		const url = "/src/my%20ui/Save%20Button.tsx";
+		const { sourceFile } = await serveModule(
+			origin,
+			url,
+			join(root, "src", "my ui", "Save Button.tsx"),
+		);
+
+		const res = await postPick(
+			origin,
+			pick({
+				file: encodeSource(sourceFile),
+				moduleUrl: `${origin}${url}?t=1`,
+			}),
+			{ "x-ui-pick-token": config.token },
+		);
+
+		expect(res.status).toBe(202);
+		expect(sent.map((forwarded) => forwarded.file)).toEqual([
+			join(await realpath(root), "src", "my ui", "Save Button.tsx"),
+		]);
+	},
+);
+
+test("a module served through /@fs/ from outside the root resolves to its own dir", async () => {
+	const sent: PickRequest[] = [];
+	const projectDir = await realpath(project);
+	const shared = join(projectDir, "packages", "ui");
+	server = await startServer(uiPick({ agent: recordingAgent(sent) }), {
+		server: { host: "127.0.0.1", port: 0, fs: { allow: [projectDir] } },
+	});
+	const origin = originOf(server);
+	const { config } = await loadClient(origin);
+	const url = `/@fs${shared}/Button.tsx`;
+	const { sourceFile } = await serveModule(
+		origin,
+		url,
+		join(shared, "Button.tsx"),
+	);
+
+	const res = await postPick(
+		origin,
+		pick({ file: sourceFile, moduleUrl: `${origin}${url}?t=5` }),
+		{ "x-ui-pick-token": config.token },
+	);
+
+	expect(res.status).toBe(202);
+	expect(sent.map((forwarded) => forwarded.file)).toEqual([
+		join(shared, "Button.tsx"),
+	]);
+});
+
+test.each([
+	["another origin", "http://evil.test/src/ui/Button.tsx"],
+	[
+		"an encoded .. climbing out of the root",
+		"/src/..%2F..%2F..%2Fetc/Button.tsx",
+	],
+	["a non-http scheme", "file:///src/ui/Button.tsx"],
+	["an overlong url", `/src/${"a".repeat(2048)}.tsx`],
+])(
+	"a moduleUrl from %s is refused with 400 and never forwarded",
+	async (_, moduleUrl) => {
+		const sent: PickRequest[] = [];
+		const origin = await serve(recordingAgent(sent));
+		const { config } = await loadClient(origin);
+
+		const res = await postPick(
+			origin,
+			pick({ file: "Button.tsx", moduleUrl }),
+			{
+				"x-ui-pick-token": config.token,
+			},
+		);
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: "invalid_pick" });
+		expect(sent).toEqual([]);
+	},
+);
+
 test("claude at the project root reads a nested vite root's file relative to itself", async () => {
 	helper = await startHelper();
 	const origin = await serve(claudeSession());
@@ -432,18 +586,29 @@ test("claude at the project root reads a nested vite root's file relative to its
 		timeout: 3000,
 	});
 	const { config } = await loadClient(origin);
+	const { sourceFile } = await serveModule(
+		origin,
+		"/src/ui/Button.tsx",
+		join(root, "src", "ui", "Button.tsx"),
+	);
 
-	await postPick(origin, pick({ file: "/src/App.tsx?t=1", line: 7 }), {
-		"x-ui-pick-token": config.token,
-	});
+	await postPick(
+		origin,
+		pick({
+			file: sourceFile,
+			moduleUrl: `${origin}/src/ui/Button.tsx?t=1`,
+			line: 7,
+		}),
+		{ "x-ui-pick-token": config.token },
+	);
 
 	await vi.waitFor(() => expect(helper?.notifications).toHaveLength(1));
 	const params = helper?.notifications[0]?.params as {
 		content: string;
 		meta: Record<string, string>;
 	};
-	expect(params.content).toContain("source: apps/web/src/App.tsx:7\n");
-	expect(params.meta.file).toBe("apps/web/src/App.tsx");
+	expect(params.content).toContain("source: apps/web/src/ui/Button.tsx:7\n");
+	expect(params.meta.file).toBe("apps/web/src/ui/Button.tsx");
 });
 
 test.each([
