@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { Options } from "modern-screenshot";
 import { afterEach, expect, test, vi } from "vitest";
 import { PickController } from "../../src/client/controller.ts";
 import { mountOverlay } from "../../src/client/overlay.ts";
@@ -48,6 +49,11 @@ function deferred<T>() {
 		resolve = done;
 	});
 	return { promise, resolve };
+}
+
+// past the capture race and the post: a few microtasks, all ahead of a 0 ms timer
+function settle(): Promise<void> {
+	return new Promise((done) => setTimeout(done, 0));
 }
 
 function respond(status: number) {
@@ -169,7 +175,7 @@ test("Escape closes the box without sending", async () => {
 	ui.key({ key: "Escape" });
 
 	expect(ui.composer.hidden).toBe(true);
-	await Promise.resolve();
+	await settle();
 	expect(ui.post).not.toHaveBeenCalled();
 });
 
@@ -183,16 +189,25 @@ test("while claude is waiting, send is off and the box says why", () => {
 	expect(ui.notice.textContent).toBe("Claude isn't connected");
 });
 
-test("keys pressed mid-composition (IME) neither close nor send", async () => {
+test("Escape mid-composition (IME) leaves the box open", () => {
 	const ui = mount();
 	ui.pick();
 	ui.type("大き");
 
 	ui.key({ key: "Escape", isComposing: true });
-	ui.key({ key: "Enter", metaKey: true, isComposing: true });
 
 	expect(ui.composer.hidden).toBe(false);
-	await Promise.resolve();
+});
+
+test("Cmd+Enter mid-composition (IME) doesn't send", async () => {
+	const ui = mount();
+	ui.pick();
+	ui.type("大き");
+
+	ui.key({ key: "Enter", metaKey: true, isComposing: true });
+
+	expect(ui.send.disabled).toBe(false);
+	await settle();
 	expect(ui.post).not.toHaveBeenCalled();
 });
 
@@ -247,13 +262,16 @@ test("a screenshot still rendering after 5 s is given up on and the pick sends w
 	expect("screenshot" in (ui.posted()[0] ?? {})).toBe(false);
 });
 
-test("the screenshot is capped to a canvas size browsers can draw", () => {
+test("the screenshot is capped to a canvas size browsers can draw, and a slow asset is skipped before the 5 s deadline", () => {
 	const ui = mount();
 	ui.pick();
-	expect(domToPng).toHaveBeenCalledWith(
-		expect.anything(),
-		expect.objectContaining({ maximumCanvasSize: expect.any(Number) }),
-	);
+	// the mock's type is domToPng's last overload, (context); this call used (node, options)
+	const [, options] = (domToPng.mock.calls[0] ?? []) as unknown as [
+		Node,
+		Options?,
+	];
+	expect(options).toMatchObject({ maximumCanvasSize: 10_000 });
+	expect(options?.timeout).toBeLessThan(5000);
 });
 
 test("a 503 answered after claude connected leaves send on to retry", async () => {
@@ -269,7 +287,7 @@ test("a 503 answered after claude connected leaves send on to retry", async () =
 	await vi.waitFor(() => expect(ui.controller.picks.size).toBe(0));
 	expect(ui.controller.canSend).toBe(true);
 	expect(ui.send.disabled).toBe(false);
-	expect(ui.notice.textContent).toBe("Claude isn't connected");
+	expect(ui.notice.textContent).toBe("Couldn't reach Claude — send again");
 	expect(ui.composer.hidden).toBe(false);
 });
 

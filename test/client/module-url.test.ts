@@ -74,3 +74,46 @@ test("no fiber, as outside react or in a production build, names no module", () 
 	Object.assign(rendered, { __reactFiber$x1y2z3: {} });
 	expect(moduleUrlOf(rendered)).toBeUndefined();
 });
+
+test.each([
+	[
+		"chrome",
+		`Error: react-stack-top-frame
+    at exports.jsxDEV (http://localhost:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=1a2b3c4d:250:30)
+    at Login (http://localhost:5173/src/routes/(auth)/($lang).login.tsx?t=1:9:3)
+    at Object.react_stack_bottom_frame (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=1a2b3c4d:18042:20)`,
+	],
+	[
+		"firefox",
+		`exports.jsxDEV@http://localhost:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=1a2b3c4d:250:30
+Login@http://localhost:5173/src/routes/(auth)/($lang).login.tsx?t=1:9:3
+react_stack_bottom_frame@http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=1a2b3c4d:18042:20
+`,
+	],
+])("parenthesized route directories stay in the url (%s)", (_, stack) => {
+	expect(moduleUrlFromStack(stack)).toBe(
+		"http://localhost:5173/src/routes/(auth)/($lang).login.tsx?t=1",
+	);
+});
+
+test("a node a library created names the app module that rendered the library's component", () => {
+	// TanStack's <Link> creates the <a> inside the deps bundle; Nav rendered the <Link>
+	const link = {
+		_debugStack: withStack(`Error: react-stack-top-frame
+    at exports.jsx (http://localhost:5173/node_modules/.vite/deps/react_jsx-runtime.js?v=1a2b3c4d:20:13)
+    at Link (http://localhost:5173/node_modules/.vite/deps/@tanstack_react-router.js?v=1a2b3c4d:2991:12)
+    at Object.react_stack_bottom_frame (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=1a2b3c4d:18042:20)`),
+		_debugOwner: {
+			tag: 0,
+			_debugStack: withStack(`Error: react-stack-top-frame
+    at exports.jsxDEV (http://localhost:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=1a2b3c4d:250:30)
+    at Nav (http://localhost:5173/src/nav.tsx?t=1:14:9)
+    at Object.react_stack_bottom_frame (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=1a2b3c4d:18042:20)`),
+			_debugOwner: null,
+		},
+	};
+	const anchor = document.createElement("a");
+	Object.assign(anchor, { __reactFiber$x1y2z3: { tag: 5, ...link } });
+
+	expect(moduleUrlOf(anchor)).toBe("http://localhost:5173/src/nav.tsx?t=1");
+});

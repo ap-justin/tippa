@@ -11,14 +11,15 @@ import { css } from "./styles.ts";
 const GAP = 8;
 /** the whole capture; past it the pick sends without a screenshot */
 const SCREENSHOT_DEADLINE_MS = 5000;
-/** modern-screenshot's, per image load and per fetch */
-const ASSET_TIMEOUT_MS = 5000;
+/** modern-screenshot's, per image load and per fetch; under the deadline, so a hung asset is skipped, not the shot */
+const ASSET_TIMEOUT_MS = 2000;
 // per side; a larger canvas is scaled down to fit. mdn: desktop browsers draw at least 10k x 10k,
 // and past a browser's limit the canvas is empty
 const MAX_CANVAS_SIDE = 10_000;
 // radix's Dialog content sets no aria-modal; its role and open state mark it
 const MODAL =
 	'dialog:modal, [aria-modal="true"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]';
+const RACED_CONNECT = "Couldn't reach Claude — send again";
 const NO_SOURCE =
 	"react-grab found no source file for this element. Try picking its parent component.";
 
@@ -294,10 +295,10 @@ export function mountOverlay(controller: PickController): PickTarget {
 		current.sending = false;
 		if (!outcome.ok) {
 			sent.delete(pickId);
-			// a 503 shows through the controller's notice, which clears when claude connects,
-			// unless claude connected while this one was in flight
-			if (outcome.error !== NOT_CONNECTED || controller.canSend)
-				current.error = outcome.error;
+			// a 503 shows through the controller's notice, which clears when claude connects
+			if (outcome.error !== NOT_CONNECTED) current.error = outcome.error;
+			// claude connected while this one was in flight
+			else if (controller.canSend) current.error = RACED_CONNECT;
 		}
 		if (outcome.ok) {
 			if (draft === current) close();

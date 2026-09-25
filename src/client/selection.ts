@@ -20,13 +20,29 @@ export function toSelection({
 	html,
 }: ResolvedElement): Selection | undefined {
 	if (!source?.filePath || !source.lineNumber) return undefined;
+	const unmapped =
+		moduleUrl !== undefined && isModulePath(source.filePath, moduleUrl);
 	return {
 		component: source.componentName ?? fallbackName ?? tagName,
 		file: source.filePath,
 		line: source.lineNumber,
-		// the sourcemap's column is 0-based; editors and claude count from 1
-		...(source.columnNumber !== null && { column: source.columnNumber + 1 }),
-		...(moduleUrl !== undefined && { moduleUrl }),
+		// a sourcemap's column is 0-based; an unmapped frame's is already 1-based, like editors'
+		...(source.columnNumber !== null && {
+			column: source.columnNumber + (unmapped ? 0 : 1),
+		}),
+		...(moduleUrl !== undefined && !unmapped && { moduleUrl }),
 		html,
 	};
+}
+
+/**
+ * react-grab hands back the module's own url path when it couldn't apply the sourcemap, minus
+ * a short `/src` it drops; a mapped source is relative to the module's directory
+ */
+function isModulePath(filePath: string, moduleUrl: string): boolean {
+	return (
+		filePath.startsWith("/") &&
+		// only the path is read, so any base resolves a root-relative url
+		new URL(moduleUrl, "http://localhost").pathname.endsWith(filePath)
+	);
 }

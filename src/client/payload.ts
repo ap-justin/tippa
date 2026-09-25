@@ -1,7 +1,8 @@
-import { MAX_SCREENSHOT_CHARS, type PickRequest } from "../protocol.ts";
-
-// base64 of the png signature; schema.ts checks the same prefix, but importing it would bundle zod
-const PNG_BASE64_PREFIX = "iVBORw0KGgo";
+import {
+	MAX_SCREENSHOT_CHARS,
+	type PickRequest,
+	PNG_BASE64_PREFIX,
+} from "../protocol.ts";
 
 /** where react-grab resolved the picked element to */
 export interface Selection {

@@ -179,6 +179,9 @@ importers:
       '@types/node':
         specifier: ^24.13.6
         version: 24.13.6
+      bippy:
+        specifier: 0.6.1
+        version: 0.6.1(react@19.3.0)
       happy-dom:
         specifier: ^20.14.5
         version: 20.14.5

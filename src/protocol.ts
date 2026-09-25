@@ -29,6 +29,8 @@ export interface ClientConfig {
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
 /** base64 chars a screenshot may take, leaving room in the body for the html and the json around it */
 export const MAX_SCREENSHOT_CHARS = MAX_BODY_BYTES - 2 * 1024 * 1024;
+/** base64 of the 8-byte png signature and the ihdr length's leading zero bits */
+export const PNG_BASE64_PREFIX = "iVBORw0KGgo";
 
 export const REPLY_EVENT = "ui-pick:reply";
 export const STATUS_EVENT = "ui-pick:status";

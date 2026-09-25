@@ -17,8 +17,8 @@ export default defineConfig([
 		dts: true,
 		// the consumer's vite serves this file as-is, so it can't lean on bare imports resolving
 		deps: {
-			alwaysBundle: [/^react-grab(\/|$)/, "modern-screenshot"],
-			onlyBundle: ["react-grab", "modern-screenshot"],
+			alwaysBundle: [/^react-grab(\/|$)/, /^bippy(\/|$)/, "modern-screenshot"],
+			onlyBundle: ["react-grab", "bippy", "modern-screenshot"],
 		},
 	},
 ]);

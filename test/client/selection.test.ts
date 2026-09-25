@@ -101,3 +101,25 @@ test("no source file or line means nothing sendable", () => {
 		}),
 	).toBeUndefined();
 });
+
+test.each([
+	["the module's own path", "/src/ui/save-button.tsx"],
+	["the path with react-grab's short /src dropped", "/ui/save-button.tsx"],
+])(
+	"when react-grab couldn't apply the sourcemap (file is %s), the column stays and no module url goes",
+	(_, filePath) => {
+		const selection = toSelection({
+			source: {
+				filePath,
+				lineNumber: 40,
+				columnNumber: 5,
+				componentName: "SaveButton",
+			},
+			moduleUrl,
+			tagName: "button",
+			html,
+		});
+		expect(selection?.column).toBe(5);
+		expect(selection && "moduleUrl" in selection).toBe(false);
+	},
+);

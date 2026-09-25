@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_SCREENSHOT_CHARS } from "./protocol.ts";
+import { MAX_SCREENSHOT_CHARS, PNG_BASE64_PREFIX } from "./protocol.ts";
 
 /** the dev server keeps this many leading chars of a pick's html */
 export const MAX_HTML_CHARS = 4000;
@@ -8,9 +8,6 @@ const MAX_MODULE_URL_CHARS = 2048;
 
 // a `<channel>` tag attribute and the key claude's replies are routed by
 export const pickIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
-
-// base64 of the 8-byte png signature and the ihdr length's leading zero bits
-const PNG_BASE64_PREFIX = "iVBORw0KGgo";
 
 /** base64 png; checked by prefix, so it holds in the browser as well as node */
 export const pngBase64Schema = z
