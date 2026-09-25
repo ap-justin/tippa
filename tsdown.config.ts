@@ -5,6 +5,7 @@ export default defineConfig([
 		entry: ["src/index.ts", "src/channel/bin.ts"],
 		format: "esm",
 		platform: "node",
+		tsconfig: "tsconfig.node.json",
 		dts: true,
 	},
 	{

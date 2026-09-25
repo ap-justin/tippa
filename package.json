@@ -22,7 +22,7 @@
 	"packageManager": "pnpm@12.4.2",
 	"scripts": {
 		"build": "tsdown",
-		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
+		"typecheck": "tsc -b",
 		"lint": "biome check .",
 		"test": "vitest run",
 		"check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
