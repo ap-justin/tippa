@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # node + npm from setup-node: npm publishes, and trusted publishing (OIDC) needs npm >= 11.5.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Tag matches package.json version
+        run: |
+          expected="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match package.json version ($expected)"
+            exit 1
+          fi
+      # pnpm only: with no runtime input and no node version file it installs no node
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          require-lockfile: true
+      - run: pnpm check
+      - run: npm publish --provenance --access public
+        env:
+          # delete the NPM_TOKEN secret once trusted publishing is configured: npm then authenticates over OIDC
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

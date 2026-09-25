@@ -10,6 +10,14 @@
 	],
 	"license": "MIT",
 	"author": "ap-justin",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ap-justin/tippa.git"
+	},
+	"homepage": "https://github.com/ap-justin/tippa#readme",
+	"bugs": {
+		"url": "https://github.com/ap-justin/tippa/issues"
+	},
 	"type": "module",
 	"exports": {
 		".": {

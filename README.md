@@ -1,5 +1,7 @@
 # tippa
 
+[![CI](https://github.com/ap-justin/tippa/actions/workflows/ci.yml/badge.svg)](https://github.com/ap-justin/tippa/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/tippa)](https://www.npmjs.com/package/tippa)
+
 Pick an element in your running Vite + React app, type what should change, and the request lands in the Claude Code session already open in that project. Claude edits the file, HMR repaints the page, and Claude's reply shows next to the element. It's a dev-server-only Vite plugin plus a small channel server that Claude Code launches. Picking is done by [react-grab](https://github.com/aidenybai/react-grab).
 
 ## Setup
@@ -68,6 +70,8 @@ and prints the line again when the state changes.
 2. Click an element. react-grab copies it as usual, and the note box opens on it with the cursor in the note. **Send to Claude** in react-grab's menu for an element opens the same box without copying.
 3. Type what should change and press **⌘/Ctrl+Enter**. Press **Esc** to cancel.
 
+A note can point at up to five elements. The first is `[1]`. While the box is open, pick another element with react-grab and `[2]`, `[3]`… is inserted at the cursor, and the element is tagged with its number on the page. Picking an element already in the note inserts its marker again. The list under the note shows each element: remove one there and its markers leave the note and the rest renumber.
+
 The element gets a status badge: sending, sent, working, done, or question. Claude's reply appears in a bubble beside the element. You can keep picking while Claude works: picks queue and Claude takes them in order. If Claude isn't connected, the note box says "Claude isn't connected" and nothing is sent.
 
 ## What Claude receives
@@ -110,3 +114,11 @@ Each `screenshot` is a PNG of its element in `.tippa/` inside the project, so Cl
 - **It stays on "waiting for Claude".** Check that Claude was started with `--dangerously-load-development-channels server:tippa`: without it the channel server stays inactive, and says so in Claude's MCP log (`claude --debug`). Check that you accepted the "New MCP server found" prompt, that the `.mcp.json` path reaches `node_modules/tippa/dist/channel/bin.mjs` from the folder Claude runs in, and that Claude was started in the project folder or a parent of the Vite root. `/mcp` in Claude shows whether `tippa` is running.
 - **`.tippa/` in your project.** The channel server creates it. It contains its own `.gitignore`, so git ignores it without any change to yours.
 - **Your app already imports react-grab.** Remove that import. tippa starts react-grab itself with telemetry off. With both, whichever copy loads first wins: if it's your app's, your app's react-grab settings, telemetry included, apply.
+
+## Releasing
+
+For maintainers. CI runs `pnpm check` on Node 22 and 24 for every push to `main` and every pull request. A `v*` tag publishes to npm with provenance.
+
+1. Bump `version` in `package.json` and commit it on `main`.
+2. Tag the commit `vX.Y.Z`, matching that version: the release fails otherwise.
+3. Push the tag: `git push origin vX.Y.Z`.
