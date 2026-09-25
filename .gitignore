@@ -2,3 +2,4 @@ node_modules
 dist
 .ui-pick/
 *.tsbuildinfo
+.claude/agent-memory-local/
