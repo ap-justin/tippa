@@ -29,6 +29,8 @@ export class PickController {
 	readonly #listeners = new Set<() => void>();
 	// unknown until the dev server answers the loader's status request; a send then learns it from a 503
 	#status: AgentStatus | undefined;
+	// bumped per status event, so a send can tell its 503 is older than the latest status
+	#statusVersion = 0;
 
 	constructor(config: ClientConfig, post: typeof fetch) {
 		this.#config = config;
@@ -50,6 +52,7 @@ export class PickController {
 
 	handleStatus({ status }: StatusEvent): void {
 		this.#status = status;
+		this.#statusVersion++;
 		this.#changed();
 	}
 
@@ -66,6 +69,7 @@ export class PickController {
 	async send(pick: PickRequest): Promise<SendOutcome> {
 		this.picks.set(pick.pickId, { badge: "sending" });
 		this.#changed();
+		const statusVersion = this.#statusVersion;
 		const outcome = await this.#post(this.#config.endpoint, {
 			method: "POST",
 			headers: {
@@ -76,7 +80,11 @@ export class PickController {
 		}).then(toOutcome, unreachable);
 		if (!outcome.ok) {
 			this.picks.delete(pick.pickId);
-			if (outcome.error === NOT_CONNECTED) this.#status = "waiting";
+			if (
+				outcome.error === NOT_CONNECTED &&
+				statusVersion === this.#statusVersion
+			)
+				this.#status = "waiting";
 		}
 		// a reply can beat the 202 here; it outranks "sent"
 		else if (this.picks.get(pick.pickId)?.badge === "sending")

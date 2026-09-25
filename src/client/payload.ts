@@ -1,7 +1,7 @@
-import type { PickRequest } from "../protocol.ts";
+import { MAX_SCREENSHOT_CHARS, type PickRequest } from "../protocol.ts";
 
-// the dev server refuses bodies over 10 MiB; leave room for the html and the json around it
-const MAX_SCREENSHOT_CHARS = 8_000_000;
+// base64 of the png signature; schema.ts checks the same prefix, but importing it would bundle zod
+const PNG_BASE64_PREFIX = "iVBORw0KGgo";
 
 /** where react-grab resolved the picked element to */
 export interface Selection {
@@ -9,6 +9,8 @@ export interface Selection {
 	file: string;
 	line: number;
 	column?: number | undefined;
+	/** see `pickRequestSchema`'s `moduleUrl` */
+	moduleUrl?: string | undefined;
 	html: string;
 }
 
@@ -31,9 +33,12 @@ export function buildPick({
 	selection,
 	screenshot,
 }: PickInput): PickRequest {
-	const { component, file, line, column, html } = selection;
+	const { component, file, line, column, moduleUrl, html } = selection;
 	// the helper takes bare base64 and rejects a data url
 	const base64 = screenshot?.slice(screenshot.indexOf(",") + 1);
+	const sendable =
+		base64?.startsWith(PNG_BASE64_PREFIX) &&
+		base64.length <= MAX_SCREENSHOT_CHARS;
 	return {
 		pickId,
 		note,
@@ -42,7 +47,7 @@ export function buildPick({
 		line,
 		html,
 		...(column !== undefined && { column }),
-		...(base64 !== undefined &&
-			base64.length <= MAX_SCREENSHOT_CHARS && { screenshot: base64 }),
+		...(moduleUrl !== undefined && { moduleUrl }),
+		...(sendable && { screenshot: base64 }),
 	};
 }

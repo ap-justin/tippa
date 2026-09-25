@@ -5,7 +5,13 @@ import { buildPick, newPickId, type Selection } from "./payload.ts";
 import { css } from "./styles.ts";
 
 const GAP = 8;
-const SCREENSHOT_TIMEOUT_MS = 5000;
+/** the whole capture; past it the pick sends without a screenshot */
+const SCREENSHOT_DEADLINE_MS = 5000;
+/** modern-screenshot's, per image load and per fetch */
+const ASSET_TIMEOUT_MS = 5000;
+// per side; a larger canvas is scaled down to fit. mdn: desktop browsers draw at least 10k x 10k,
+// and past a browser's limit the canvas is empty
+const MAX_CANVAS_SIDE = 10_000;
 const NO_SOURCE =
 	"react-grab found no source file for this element. Try picking its parent component.";
 
@@ -14,6 +20,8 @@ interface Draft {
 	selection: Selection | undefined;
 	screenshot: Promise<string | undefined>;
 	sending: boolean;
+	/** closed by the user; a send still waiting on its screenshot posts nothing */
+	cancelled: boolean;
 	error?: string | undefined;
 }
 
@@ -144,6 +152,7 @@ export function mountOverlay(controller: PickController): OnPick {
 	}
 
 	function close(): void {
+		if (draft) draft.cancelled = true;
 		draft = undefined;
 		draftAnchor = undefined;
 		composer.hidden = true;
@@ -155,26 +164,32 @@ export function mountOverlay(controller: PickController): OnPick {
 		current.sending = true;
 		current.error = undefined;
 		renderComposer();
+		const text = note.value;
+		const screenshot = await current.screenshot;
+		if (current.cancelled) return;
 		const pickId = newPickId();
 		anchors.set(pickId, new Anchor(current.element));
 		const outcome = await controller.send(
 			buildPick({
 				pickId,
-				note: note.value,
+				note: text,
 				selection: current.selection,
-				screenshot: await current.screenshot,
+				screenshot,
 			}),
 		);
 		current.sending = false;
 		if (!outcome.ok) {
 			anchors.delete(pickId);
-			// a 503 shows through the controller's notice, which clears when claude connects
-			if (outcome.error !== NOT_CONNECTED) current.error = outcome.error;
+			// a 503 shows through the controller's notice, which clears when claude connects,
+			// unless claude connected while this one was in flight
+			if (outcome.error !== NOT_CONNECTED || controller.canSend)
+				current.error = outcome.error;
 		}
-		// the user may have picked another element while this one was sending
-		if (draft !== current) return;
-		if (outcome.ok) close();
-		else renderComposer();
+		if (outcome.ok) {
+			if (draft === current) close();
+		} else if (draft === current) renderComposer();
+		// picked something else while this one was sending: it comes back so its note isn't lost
+		else if (!current.cancelled) open(current, text);
 	}
 
 	composer.addEventListener("submit", (event) => {
@@ -184,6 +199,8 @@ export function mountOverlay(controller: PickController): OnPick {
 	composer.addEventListener("keydown", (event) => {
 		// the app's own shortcuts shouldn't fire while typing a note
 		event.stopPropagation();
+		// Escape and Enter belong to the IME while it's converting
+		if (event.isComposing) return;
 		if (event.key === "Escape") close();
 		if (event.key === "Enter" && (event.metaKey || event.ctrlKey))
 			composer.requestSubmit();
@@ -194,29 +211,46 @@ export function mountOverlay(controller: PickController): OnPick {
 		renderPicks();
 	});
 
-	return (element, selection) => {
-		draft = {
-			element,
-			selection,
-			// a failed screenshot sends the pick without one
-			screenshot: selection
-				? domToPng(element, { timeout: SCREENSHOT_TIMEOUT_MS }).catch(
-						() => undefined,
-					)
-				: Promise.resolve(undefined),
-			sending: false,
-		};
-		draftAnchor = new Anchor(element);
-		target.textContent = selection
-			? `${selection.component} · ${location(selection)}`
-			: element.localName;
-		note.value = "";
+	function open(next: Draft, text: string): void {
+		draft = next;
+		draftAnchor = new Anchor(next.element);
+		target.textContent = next.selection
+			? `${next.selection.component} · ${location(next.selection)}`
+			: next.element.localName;
+		note.value = text;
 		composer.hidden = false;
 		renderComposer();
 		place(composer, draftAnchor.rect());
 		follow();
 		note.focus();
+	}
+
+	return (element, selection) => {
+		// an unsent note carries over to the new pick; one already sending went with its pick
+		const text = draft && !draft.sending ? note.value : "";
+		open(
+			{
+				element,
+				selection,
+				screenshot: selection ? capture(element) : Promise.resolve(undefined),
+				sending: false,
+				cancelled: false,
+			},
+			text,
+		);
 	};
+}
+
+/** a png data url, or undefined when the capture fails or runs past its deadline */
+function capture(element: Element): Promise<string | undefined> {
+	const deadline = new Promise<undefined>((resolve) =>
+		setTimeout(resolve, SCREENSHOT_DEADLINE_MS),
+	);
+	const shot = domToPng(element, {
+		timeout: ASSET_TIMEOUT_MS,
+		maximumCanvasSize: MAX_CANVAS_SIDE,
+	}).catch(() => undefined);
+	return Promise.race([shot, deadline]);
 }
 
 function location({ file, line, column }: Selection): string {

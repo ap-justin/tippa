@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 import { buildPick, newPickId } from "../../src/client/payload.ts";
+import { toSelection } from "../../src/client/selection.ts";
+import { MAX_SCREENSHOT_CHARS } from "../../src/protocol.ts";
 import { pickRequestSchema as pickSchema } from "../../src/schema.ts";
 
 // the 8-byte png signature, as a data url the way modern-screenshot returns one
@@ -60,7 +62,7 @@ test("pick ids are distinct and fit the helper's filename rule", () => {
 });
 
 test("a screenshot too big for the dev server's body limit is dropped, not sent", () => {
-	const huge = `data:image/png;base64,${"A".repeat(9_000_000)}`;
+	const huge = `data:image/png;base64,iVBORw0KGgo${"A".repeat(MAX_SCREENSHOT_CHARS)}`;
 	const pick = buildPick({
 		pickId: "p1",
 		note: "",
@@ -68,4 +70,34 @@ test("a screenshot too big for the dev server's body limit is dropped, not sent"
 		screenshot: huge,
 	});
 	expect("screenshot" in pick).toBe(false);
+});
+
+test.each([
+	["empty, as a zero-size or oversize canvas renders", "data:,"],
+	["not a png", "data:image/jpeg;base64,/9j/4AAQSkZJRg=="],
+])("a screenshot that's %s is dropped, not sent", (_, screenshot) => {
+	const pick = buildPick({ pickId: "p1", note: "", selection, screenshot });
+	expect("screenshot" in pick).toBe(false);
+	expect(pickSchema.safeParse(pick).success).toBe(true);
+});
+
+test("the posted pick carries the module url and react-grab's column counted from 1", () => {
+	const moduleUrl = "http://localhost:5173/src/components/price-card.tsx?t=1";
+	const picked = toSelection({
+		source: {
+			filePath: "price-card.tsx",
+			lineNumber: 42,
+			columnNumber: 0,
+			componentName: "PriceCard",
+		},
+		moduleUrl,
+		tagName: "div",
+		html: "<div></div>",
+	});
+	if (!picked) throw new Error("no selection");
+
+	const pick = buildPick({ pickId: "p1", note: "", selection: picked });
+
+	expect(pick).toMatchObject({ file: "price-card.tsx", column: 1, moduleUrl });
+	expect(pickSchema.safeParse(pick).success).toBe(true);
 });

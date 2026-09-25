@@ -3,25 +3,57 @@ import { toSelection } from "../../src/client/selection.ts";
 
 const html = "<button>Save</button>";
 
-test("maps react-grab's source info to a selection", () => {
+const moduleUrl = "http://localhost:5173/src/ui/save-button.tsx?t=1";
+
+test("maps react-grab's source info and the module it came from to a selection", () => {
 	expect(
 		toSelection({
 			source: {
-				filePath: "/src/app.tsx",
+				filePath: "save-button.tsx",
 				lineNumber: 12,
 				columnNumber: 5,
 				componentName: "SaveButton",
 			},
+			moduleUrl,
 			tagName: "button",
 			html,
 		}),
-	).toEqual({
+	).toStrictEqual({
 		component: "SaveButton",
-		file: "/src/app.tsx",
+		file: "save-button.tsx",
 		line: 12,
-		column: 5,
+		column: 6,
+		moduleUrl,
 		html,
 	});
+});
+
+test("the sourcemap's 0-based column becomes the editor's 1-based one", () => {
+	const selection = toSelection({
+		source: {
+			filePath: "save-button.tsx",
+			lineNumber: 12,
+			columnNumber: 0,
+			componentName: "SaveButton",
+		},
+		tagName: "button",
+		html,
+	});
+	expect(selection?.column).toBe(1);
+});
+
+test("no module url leaves the field out", () => {
+	const selection = toSelection({
+		source: {
+			filePath: "/src/app.tsx",
+			lineNumber: 12,
+			columnNumber: 5,
+			componentName: "SaveButton",
+		},
+		tagName: "button",
+		html,
+	});
+	expect(selection && "moduleUrl" in selection).toBe(false);
 });
 
 test("an unknown column is left out", () => {

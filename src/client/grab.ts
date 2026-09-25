@@ -1,4 +1,5 @@
 import { formatElementInfo, init, type ReactGrabAPI } from "react-grab/core";
+import { moduleUrlOf } from "./module-url.ts";
 import type { Selection } from "./payload.ts";
 import { toSelection } from "./selection.ts";
 
@@ -32,6 +33,8 @@ export function startGrab(key: string | undefined, onPick: OnPick): void {
 				id: "ui-pick-send",
 				label: "Send to Claude",
 				showInToolbarMenu: true,
+				// a pick names one element; greyed out for a drag or multi-select
+				enabled: ({ elements }) => elements.length === 1,
 				async onAction({ element, componentName, tagName, cleanup }) {
 					// react-grab's frozen styles must be gone before the screenshot
 					cleanup();
@@ -43,6 +46,7 @@ export function startGrab(key: string | undefined, onPick: OnPick): void {
 						element,
 						toSelection({
 							source,
+							moduleUrl: moduleUrlOf(element),
 							fallbackName:
 								componentName ?? grab.getDisplayName(element) ?? undefined,
 							tagName: tagName ?? element.localName,
