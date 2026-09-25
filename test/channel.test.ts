@@ -1,6 +1,9 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import {
 	access,
 	chmod,
+	mkdir,
 	mkdtemp,
 	readFile,
 	realpath,
@@ -149,7 +152,9 @@ test("screenshots go to a private per-session dir in the project's .ui-pick, nam
 	const shot = screenshotOf(notifications[0]);
 
 	expect(dirname(dirname(shot))).toBe(join(cwd, ".ui-pick"));
-	expect(basename(dirname(shot))).toMatch(/^shots-[0-9a-f]+$/);
+	expect(basename(dirname(shot))).toMatch(
+		new RegExp(`^shots-${process.pid}-[0-9a-f]{16}$`),
+	);
 	expect((await stat(dirname(shot))).mode & 0o777).toBe(0o700);
 	expect(basename(shot)).not.toContain("p_1");
 
@@ -188,6 +193,29 @@ test("a screenshot that can't be written answers 500, logs why and emits nothing
 		expect(notifications).toEqual([]);
 	} finally {
 		await chmod(join(cwd, ".ui-pick"), 0o700);
+	}
+});
+
+test("at startup, screenshot dirs left by helpers that are gone are removed and live ones kept", async () => {
+	const other = await mkdtemp(join(tmpdir(), "ui-pick-test-"));
+	const gone = spawn(process.execPath, ["-e", ""]);
+	await once(gone, "exit");
+	const dead = join(other, ".ui-pick", `shots-${gone.pid}-00`);
+	const live = join(other, ".ui-pick", `shots-${process.pid}-00`);
+	await mkdir(dead, { recursive: true });
+	await mkdir(live, { recursive: true });
+	const [, serverTransport] = InMemoryTransport.createLinkedPair();
+
+	const started = await startChannel({
+		cwd: other,
+		transport: serverTransport,
+	});
+	try {
+		await expect(access(dead)).rejects.toThrow("ENOENT");
+		await expect(access(live)).resolves.toBeUndefined();
+	} finally {
+		await started.close();
+		await rm(other, { recursive: true, force: true });
 	}
 });
 
@@ -424,7 +452,7 @@ test("a reply with no browser listening is not an error", async () => {
 
 test.each([
 	["an id this session never emitted", "p_never", /unknown pick_id/],
-	["a malformed id", "../x", /pick_id/],
+	["a malformed id", "../x", /Input validation error.*pick_id/s],
 ])(
 	"a reply to %s is a tool error and reaches no browser",
 	async (_, pickId, text) => {

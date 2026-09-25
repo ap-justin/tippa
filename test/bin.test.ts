@@ -13,24 +13,29 @@ const CHANNEL_ARGS = [
 	"server:ui-pick",
 ];
 
+const CLAUDE = resolve(import.meta.dirname, "fixtures/claude.mjs");
+
 let cwd: string;
 let launcher: ChildProcess;
 
-/**
- * the helper as claude code spawns it: a child of a process started with the channel flag.
- * `sh` stands in for claude and stays the parent, since `; exit` keeps it from exec'ing node
- */
-function spawnFlagged(dir: string, env: NodeJS.ProcessEnv = process.env) {
+/** the helper as claude code spawns it: a child of a claude stand-in started with `claudeArgs` */
+function spawnUnder(
+	claudeArgs: string[],
+	dir: string,
+	{
+		env = process.env,
+		stderr = "inherit",
+	}: { env?: NodeJS.ProcessEnv; stderr?: "inherit" | "pipe" } = {},
+) {
 	return spawn(
-		"sh",
-		[
-			"-c",
-			`"${process.execPath}" "${BIN}"; exit $?`,
-			"claude",
-			...CHANNEL_ARGS,
-		],
-		{ cwd: dir, env, stdio: ["pipe", "pipe", "inherit"] },
+		process.execPath,
+		[CLAUDE, ...claudeArgs, "--run", process.execPath, BIN],
+		{ cwd: dir, env, stdio: ["pipe", "pipe", stderr] },
 	);
+}
+
+function spawnFlagged(dir: string, env: NodeJS.ProcessEnv = process.env) {
+	return spawnUnder(CHANNEL_ARGS, dir, { env });
 }
 
 async function discoveryIn(dir: string): Promise<Discovery> {
@@ -41,7 +46,7 @@ async function discoveryIn(dir: string): Promise<Discovery> {
 	);
 }
 
-/** SIGTERM the helper and wait for its launcher, so its cleanup runs before the next test */
+/** SIGTERM the helper and wait for its stand-in, so its cleanup runs before the next test */
 async function stop(child: ChildProcess, helperPid: number): Promise<void> {
 	if (child.exitCode !== null || child.signalCode !== null) return;
 	const exited = once(child, "exit");
@@ -101,52 +106,97 @@ test("the helper writes its discovery file under CLAUDE_PROJECT_DIR when claude 
 	}
 });
 
-test("a helper under a claude started without the channel flag stays an mcp server but writes no discovery file and opens no port", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "ui-pick-unflagged-"));
-	const unflagged = spawn(process.execPath, [BIN], {
-		cwd: dir,
-		stdio: ["pipe", "pipe", "pipe"],
+/** the one child of `pid`, `depth` generations down */
+async function descendant(
+	pid: number | undefined,
+	depth: number,
+): Promise<number> {
+	let current = Number(pid);
+	for (let i = 0; i < depth; i++) {
+		const { stdout } = await promisify(execFile)("pgrep", [
+			"-P",
+			String(current),
+		]);
+		current = Number(stdout.trim());
+	}
+	return current;
+}
+
+function initialize(child: ChildProcess): Promise<unknown> {
+	child.stdin?.write(
+		`${JSON.stringify({
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: {
+				protocolVersion: "2025-11-25",
+				capabilities: {},
+				clientInfo: { name: "test", version: "0" },
+			},
+		})}\n`,
+	);
+	return once(child.stdout as NodeJS.ReadableStream, "data").then(([answer]) =>
+		JSON.parse(String(answer)),
+	);
+}
+
+/**
+ * spawns the helper under `claudeArgs` and checks it came up inert: one stderr line
+ * matching `reason`, an mcp server that answers, no discovery file, no listening port
+ */
+async function expectInert(
+	claudeArgs: string[],
+	reason: RegExp,
+	{ depth = 1, env }: { depth?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<void> {
+	const dir = await mkdtemp(join(tmpdir(), "ui-pick-inert-"));
+	const child = spawnUnder(claudeArgs, dir, {
+		stderr: "pipe",
+		...(env && { env }),
 	});
 	try {
 		let stderr = "";
-		unflagged.stderr.on("data", (chunk) => {
+		child.stderr?.on("data", (chunk) => {
 			stderr += chunk;
 		});
-		await vi.waitFor(
-			() =>
-				expect(stderr).toMatch(
-					/--dangerously-load-development-channels server:ui-pick/,
-				),
-			{ timeout: 3000 },
-		);
+		await vi.waitFor(() => expect(stderr).toMatch(reason), { timeout: 3000 });
 		expect(stderr.trim().split("\n")).toHaveLength(1);
 
-		unflagged.stdin.write(
-			`${JSON.stringify({
-				jsonrpc: "2.0",
-				id: 1,
-				method: "initialize",
-				params: {
-					protocolVersion: "2025-11-25",
-					capabilities: {},
-					clientInfo: { name: "test", version: "0" },
-				},
-			})}\n`,
-		);
-		const [answer] = await once(unflagged.stdout, "data");
-		expect(JSON.parse(String(answer))).toMatchObject({
+		expect(await initialize(child)).toMatchObject({
 			id: 1,
 			result: { serverInfo: { name: "ui-pick" } },
 		});
-
 		await expect(access(join(dir, ".ui-pick"))).rejects.toThrow("ENOENT");
-		expect(await listeningPorts(unflagged.pid)).toEqual([]);
+		expect(await listeningPorts(await descendant(child.pid, depth))).toEqual(
+			[],
+		);
 	} finally {
-		const exited = once(unflagged, "exit");
-		unflagged.kill("SIGTERM");
+		const exited = once(child, "exit");
+		child.kill("SIGTERM");
 		await exited;
 		await rm(dir, { recursive: true, force: true });
 	}
+}
+
+const NEEDS_FLAG =
+	/started with --dangerously-load-development-channels server:ui-pick/;
+
+test("a helper under a claude started without the channel flag stays an mcp server but writes no discovery file and opens no port", async () => {
+	await expectInert([], NEEDS_FLAG);
+});
+
+test("a helper under an unflagged claude that a flagged claude started stays inert", async () => {
+	await expectInert(
+		[...CHANNEL_ARGS, "--run", process.execPath, CLAUDE],
+		NEEDS_FLAG,
+		{ depth: 2 },
+	);
+});
+
+test("a helper that can't run ps says so, not that the flag is missing", async () => {
+	await expectInert(CHANNEL_ARGS, /couldn't read the process table/, {
+		env: { ...process.env, PATH: "" },
+	});
 });
 
 test("the flagged helper's listener shows up where the unflagged test looks", async () => {

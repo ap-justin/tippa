@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -13,10 +13,33 @@ const DIST_ENTRY = resolve(import.meta.dirname, "../dist/index.mjs");
 let server: ViteDevServer | undefined;
 let root: string | undefined;
 
+const SRC = resolve(import.meta.dirname, "../src");
+const DIST_CLIENT = resolve(import.meta.dirname, "../dist/client/index.js");
+
 beforeAll(async () => {
-	await access(DIST_ENTRY).catch(() => {
-		throw new Error(`${DIST_ENTRY} is missing: run pnpm build first`);
-	});
+	const built = await Promise.all(
+		[DIST_ENTRY, DIST_CLIENT].map((file) =>
+			stat(file).catch(() => {
+				throw new Error(`${file} is missing: run pnpm build first`);
+			}),
+		),
+	);
+	const sources = await readdir(SRC, { recursive: true, withFileTypes: true });
+	const newestSource = Math.max(
+		...(await Promise.all(
+			sources
+				.filter((entry) => entry.isFile())
+				.map(
+					async (entry) =>
+						(
+							await stat(join(entry.parentPath, entry.name))
+						).mtimeMs,
+				),
+		)),
+	);
+	if (Math.min(...built.map((file) => file.mtimeMs)) < newestSource) {
+		throw new Error("dist is older than src: run pnpm build first");
+	}
 });
 
 afterEach(async () => {

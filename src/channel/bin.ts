@@ -1,23 +1,30 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { startChannel, startInertChannel } from "./channel.ts";
-import { isLoadedAsChannel } from "./launch.ts";
+import { channelLaunch } from "./launch.ts";
 
 // the key under `mcpServers` in the project's .mcp.json, as the readme sets it up
 const SERVER_NAME = "ui-pick";
+const FLAG = `--dangerously-load-development-channels server:${SERVER_NAME}`;
+
+const INACTIVE = {
+	no_flag: `ui-pick is inactive: picks reach claude only when it's started with ${FLAG}`,
+	unreadable: `ui-pick is inactive: couldn't read the process table (ps) to check that claude was started with ${FLAG}`,
+};
 
 // stdout carries the mcp protocol; logs go to stderr
 const transport = new StdioServerTransport();
-const channel = (await isLoadedAsChannel(SERVER_NAME))
-	? await startChannel({
-			// claude code sets CLAUDE_PROJECT_DIR for the mcp servers it spawns
-			cwd: process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
-			transport,
-		})
-	: await startInert();
+const launch = await channelLaunch(SERVER_NAME);
+const channel =
+	launch === "channel"
+		? await startChannel({
+				// claude code sets CLAUDE_PROJECT_DIR for the mcp servers it spawns
+				cwd: process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
+				transport,
+			})
+		: await startInert(INACTIVE[launch]);
 
-async function startInert() {
-	const reason = `ui-pick is inactive: picks reach claude only when it's started with --dangerously-load-development-channels server:${SERVER_NAME}`;
+async function startInert(reason: string) {
 	console.error(reason);
 	return startInertChannel(transport, reason);
 }

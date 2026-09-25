@@ -11,6 +11,7 @@ import {
 	type Discovery,
 	discoveryPath,
 	discoverySchema,
+	isAlive,
 } from "./channel/discovery.ts";
 import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
 import { pickReplySchema } from "./schema.ts";
@@ -212,16 +213,6 @@ function isHealthy(body: string): boolean {
 		return healthSchema.safeParse(JSON.parse(body)).success;
 	} catch {
 		return false;
-	}
-}
-
-function isAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		// EPERM: alive, owned by another user
-		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
 }
 

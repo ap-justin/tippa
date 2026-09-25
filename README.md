@@ -57,7 +57,7 @@ claude --dangerously-load-development-channels server:ui-pick
 
 The first time you start Claude in the project, it asks "New MCP server found in this project: ui-pick". Choose **Use this MCP server**. If you decline, the channel server never starts and the dev server stays on "waiting for Claude".
 
-Channels are a Claude Code research preview, and the flag and the channel API may still change. A `claude` started in the project without the flag still launches the channel server, because `.mcp.json` lists it, but the server stays inactive: it doesn't listen and doesn't tell the dev server where to find it, so that session can't take picks meant for the one that has the flag.
+Channels are a Claude Code research preview, and the flag and the channel API may still change. A `claude` started in the project without the flag still launches the channel server, because `.mcp.json` lists it, but the server stays inactive: it doesn't listen and doesn't tell the dev server where to find it, so that session can't take picks meant for the one that has the flag. That holds for a `claude` started from inside the flagged session too, since the channel server checks only the `claude` that launched it. If the server can't read the process table (no `ps`), it stays inactive and says so.
 
 Start `pnpm dev` too. The order doesn't matter. The dev server prints one of:
 
@@ -98,7 +98,7 @@ html:
 ## Security
 
 - **Dev server only.** The plugin applies only to `vite dev`, so `vite build` output contains nothing from ui-pick. It also stays off when Vitest (or anything else running Vite in `test` mode) loads your config.
-- **This machine only.** The dev server accepts picks only from this machine. With `server.host` set (`--host`, Docker, phone testing) other devices can open the app, but their picks are refused, and the dev server warns about it at startup. The channel server listens on `127.0.0.1` and accepts only requests that carry its secret. The secret is stored in `.ui-pick/channel.json` in your project, readable only by your user.
+- **This machine only.** The dev server accepts picks only from this machine. With `server.host` set (`--host`, Docker, phone testing) other devices can open the app, but their picks are refused, and the dev server warns about it at startup. Tunnels and local reverse proxies (ngrok, cloudflared, `tailscale serve` and the like) aren't supported: a pick carrying a `Forwarded`, `X-Forwarded-For`, `X-Real-IP` or `CF-Connecting-IP` header is refused. The channel server listens on `127.0.0.1` and accepts only requests that carry its secret. The secret is stored in `.ui-pick/channel.json` in your project, readable only by your user.
 - **Same page only.** The dev server accepts a pick only from the app's own origin, with a token handed to the page at load, so another site open in your browser can't send one.
 - **No extra permissions.** A pick is a message to Claude. Every edit Claude makes goes through Claude Code's usual permission prompts. Claude treats the HTML and component names as data from the page, not as instructions.
 

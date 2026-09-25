@@ -821,6 +821,29 @@ test.skipIf(!lanAddress)(
 	},
 );
 
+test.each([
+	["forwarded", "for=203.0.113.7"],
+	["x-forwarded-for", "203.0.113.7"],
+	["x-real-ip", "203.0.113.7"],
+	["cf-connecting-ip", "203.0.113.7"],
+])(
+	"a pick relayed by a tunnel or proxy (%s) is refused with 403 though its socket is loopback",
+	async (header, value) => {
+		const sent: PickRequest[] = [];
+		const origin = await serve(recordingAgent(sent));
+		const { config } = await loadClient(origin);
+
+		const res = await postPick(origin, pick(), {
+			"x-ui-pick-token": config.token,
+			[header]: value,
+		});
+
+		expect(res.status).toBe(403);
+		expect(await res.json()).toEqual({ error: "forbidden_forwarded" });
+		expect(sent).toEqual([]);
+	},
+);
+
 test("a same-origin browser post passes on sec-fetch-site alone", async () => {
 	const origin = await serve(idleAgent);
 	const { config } = await loadClient(origin);

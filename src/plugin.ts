@@ -50,7 +50,7 @@ export function uiPick(options: UiPickOptions): Plugin {
 	const sessions = new WeakMap<object, ServerSession>();
 	return {
 		name: NAME,
-		// vitest and storybook start a dev server from the app's config; picks have no page there
+		// vitest, and anything else running vite in test mode, starts a dev server from the app's config; picks have no page there
 		apply: (_, env) =>
 			env.command === "serve" && env.mode !== "test" && !process.env.VITEST,
 		// the session and its token are keyed by the `client` environment alone
@@ -159,7 +159,7 @@ function validate(options: UiPickOptions): void {
 
 /**
  * `POST /__ui-pick/pick` → 202 `{ pickId, status: "sent" }`, or `{ error }` with
- * 403 `forbidden_address`, 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
+ * 403 `forbidden_address`, 403 `forbidden_forwarded`, 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
  * 503 `not_connected`, 502 `send_failed`
  */
 function pickEndpoint({
@@ -180,6 +180,11 @@ function pickEndpoint({
 		if (!isLoopback(req.socket.remoteAddress)) {
 			req.resume();
 			return sendJson(res, 403, { error: "forbidden_address" });
+		}
+		// a tunnel or local reverse proxy connects from loopback on a remote visitor's behalf
+		if (FORWARDING_HEADERS.some((header) => header in req.headers)) {
+			req.resume();
+			return sendJson(res, 403, { error: "forbidden_forwarded" });
 		}
 		if (!isSameOrigin(req)) {
 			req.resume();
@@ -312,6 +317,12 @@ function mapSourcePath(source: string, moduleFile: string): string {
 }
 
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const FORWARDING_HEADERS = [
+	"forwarded",
+	"x-forwarded-for",
+	"x-real-ip",
+	"cf-connecting-ip",
+];
 
 function isLoopback(address: string | undefined): boolean {
 	return address !== undefined && LOOPBACK_ADDRESSES.has(address);

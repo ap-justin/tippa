@@ -17,6 +17,8 @@ import { pickIdSchema, pickReplySchema } from "../schema.ts";
 import {
 	prepareStateDir,
 	removeDiscovery,
+	removeOrphanedScreenshots,
+	screenshotDirName,
 	stateDir,
 	writeDiscovery,
 } from "./discovery.ts";
@@ -58,8 +60,9 @@ export async function startChannel({
 	// inside claude's working dir, so reading a screenshot needs no extra permission
 	const screenshotDir = join(
 		stateDir(cwd),
-		`shots-${randomBytes(8).toString("hex")}`,
+		screenshotDirName(process.pid, randomBytes(8).toString("hex")),
 	);
+	removeOrphanedScreenshots(cwd);
 	// vite reports files by their resolved path, so compare against the resolved project
 	const projectDir = await realpath(cwd);
 	let initialized = false;
