@@ -1,21 +1,25 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
 	type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import { hasSecretHeader, isClientAbort, readBody, sendJson } from "../http.ts";
 import { MAX_BODY_BYTES } from "../protocol.ts";
-import { pickReplySchema } from "../schema.ts";
-import { removeDiscovery, writeDiscovery } from "./discovery.ts";
+import { pickIdSchema, pickReplySchema } from "../schema.ts";
+import {
+	prepareStateDir,
+	removeDiscovery,
+	stateDir,
+	writeDiscovery,
+} from "./discovery.ts";
 import {
 	formatContent,
 	formatMeta,
@@ -34,6 +38,9 @@ const INSTRUCTIONS = [
 	'Call the reply tool with the pick_id: status "working" when you start, "done" with a one-line summary after the edit, "question" when you need the developer\'s answer.',
 ].join("\n");
 
+const INERT_INSTRUCTIONS =
+	"ui-pick is inactive in this session: Claude Code was started without --dangerously-load-development-channels server:ui-pick, so picks from the browser can't reach it. To use ui-pick, restart claude with that flag.";
+
 export interface ChannelOptions {
 	/** project root the discovery file is written under */
 	cwd: string;
@@ -51,10 +58,15 @@ export async function startChannel({
 	transport,
 }: ChannelOptions): Promise<Channel> {
 	const listeners = new Set<ServerResponse>();
-	const screenshotDir = await mkdtemp(join(tmpdir(), "ui-pick-"));
+	// inside claude's working dir, so reading a screenshot needs no extra permission
+	const screenshotDir = join(
+		stateDir(cwd),
+		`shots-${randomBytes(8).toString("hex")}`,
+	);
 	// vite reports files by their resolved path, so compare against the resolved project
 	const projectDir = await realpath(cwd);
 	let initialized = false;
+	const emitted = new Set<string>();
 	// notifications emitted in arrival order, whatever each screenshot write costs
 	let sending: Promise<unknown> = Promise.resolve();
 
@@ -71,7 +83,7 @@ export async function startChannel({
 			description:
 				"Report progress on a ui-pick request back to the developer's browser, shown beside the picked element.",
 			inputSchema: {
-				pick_id: z.string().describe("pick_id from the <channel> tag"),
+				pick_id: pickIdSchema.describe("pick_id from the <channel> tag"),
 				status: pickReplySchema.shape.status,
 				message: z
 					.string()
@@ -79,6 +91,17 @@ export async function startChannel({
 			},
 		},
 		async ({ pick_id, status, message }) => {
+			if (!emitted.has(pick_id)) {
+				return {
+					isError: true,
+					content: [
+						{
+							type: "text",
+							text: `unknown pick_id ${pick_id}: use the pick_id attribute of a <channel source="ui-pick"> event from this session`,
+						},
+					],
+				};
+			}
 			const event = `data: ${JSON.stringify({ pickId: pick_id, status, message })}\n\n`;
 			for (const listener of listeners) listener.write(event);
 			const text =
@@ -102,6 +125,8 @@ export async function startChannel({
 		let screenshotPath: string | undefined;
 		if (pick.screenshot) {
 			screenshotPath = join(screenshotDir, `${randomUUID()}.png`);
+			await prepareStateDir(cwd);
+			await mkdir(screenshotDir, { recursive: true, mode: 0o700 });
 			await writeFile(screenshotPath, pick.screenshot);
 		}
 		await mcp.server.notification({
@@ -111,6 +136,7 @@ export async function startChannel({
 				meta: formatMeta(pick, screenshotPath),
 			},
 		});
+		emitted.add(pick.pickId);
 	}
 
 	function enqueuePick(pick: Pick): Promise<void> {
@@ -204,4 +230,19 @@ export async function startChannel({
 			return closing;
 		},
 	};
+}
+
+/**
+ * for a claude that would drop channel events: an mcp server that says why, with no
+ * listener and no discovery file, so it can't take picks meant for a session that has the flag
+ */
+export async function startInertChannel(
+	transport: Transport,
+): Promise<Channel> {
+	const mcp = new McpServer(
+		{ name: "ui-pick", version: "0.0.0" },
+		{ instructions: INERT_INSTRUCTIONS },
+	);
+	await mcp.connect(transport);
+	return { close: () => mcp.close(), releaseSync() {} };
 }

@@ -44,14 +44,15 @@ function fenced(text: string, lang: string): string {
 	return `${fence}${lang}\n${text}\n${fence}`;
 }
 
+/** meta values become `<channel>` tag attributes: page data is cut to chars that can't end or forge one */
 export function formatMeta(
 	pick: Pick,
 	screenshotPath: string | undefined,
 ): Record<string, string> {
 	return {
 		pick_id: pick.pickId,
-		component: pick.component,
-		file: pick.file,
+		component: pick.component.replace(/[^A-Za-z0-9_.$-]/g, "_"),
+		file: pick.file.replace(/["<>\p{Cc}]/gu, ""),
 		line: String(pick.line),
 		...(screenshotPath && { screenshot: screenshotPath }),
 	};

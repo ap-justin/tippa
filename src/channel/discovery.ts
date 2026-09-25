@@ -12,8 +12,19 @@ export const discoverySchema = z.object({
 
 export type Discovery = z.output<typeof discoverySchema>;
 
+/** `<cwd>/.ui-pick`, the helper's state: discovery file and screenshots */
+export function stateDir(cwd: string): string {
+	return join(cwd, ".ui-pick");
+}
+
 export function discoveryPath(cwd: string): string {
-	return join(cwd, ".ui-pick", "channel.json");
+	return join(stateDir(cwd), "channel.json");
+}
+
+/** creates the state dir if it's gone, ignored by the app's git: it holds a live secret */
+export async function prepareStateDir(cwd: string): Promise<void> {
+	await mkdir(stateDir(cwd), { recursive: true });
+	await writeFile(join(stateDir(cwd), ".gitignore"), "*\n");
 }
 
 export async function writeDiscovery(
@@ -21,9 +32,7 @@ export async function writeDiscovery(
 	discovery: Discovery,
 ): Promise<void> {
 	const path = discoveryPath(cwd);
-	await mkdir(join(cwd, ".ui-pick"), { recursive: true });
-	// the file holds a live secret; keep it out of the app's git
-	await writeFile(join(cwd, ".ui-pick", ".gitignore"), "*\n");
+	await prepareStateDir(cwd);
 	const tmp = `${path}.${discovery.pid}.tmp`;
 	await writeFile(tmp, JSON.stringify(discovery), { mode: 0o600 });
 	await rename(tmp, path);

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
@@ -191,6 +191,60 @@ test("when the stream ends the status is waiting at once and send refuses as not
 			html: "<p></p>",
 		}),
 	).rejects.toBeInstanceOf(AgentNotConnectedError);
+});
+
+const PICK = {
+	pickId: "p_1",
+	note: "n",
+	component: "C",
+	file: "f.tsx",
+	line: 1,
+	html: "<p></p>",
+};
+
+test("a helper that stops listening before its stream ends refuses sends as not connected", async () => {
+	await serveFake(helperLike(() => {}));
+	const session = connect();
+	await vi.waitFor(() => expect(statuses).toEqual(["connected"]));
+
+	// the open stream keeps its socket; new connections are refused
+	fake?.close();
+
+	await expect(session.send(PICK)).rejects.toBeInstanceOf(
+		AgentNotConnectedError,
+	);
+});
+
+test("a helper that never answers a pick times the send out after 10 s", async () => {
+	await serveFake((req, res) => {
+		if (req.url === "/pick") return;
+		helperLike(() => {})(req, res);
+	});
+	const session = connect();
+	await vi.waitFor(() => expect(statuses).toEqual(["connected"]));
+	const timeouts: number[] = [];
+	const timer = new AbortController();
+	vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+		timeouts.push(ms);
+		return timer.signal;
+	});
+
+	const sent = session.send(PICK);
+	await vi.waitFor(() => expect(requests).toContain("POST /pick"));
+	timer.abort(new DOMException("timed out", "TimeoutError"));
+
+	await expect(sent).rejects.toThrow("timed out");
+	await expect(sent).rejects.not.toBeInstanceOf(AgentNotConnectedError);
+	expect(timeouts).toEqual([10_000]);
+});
+
+test("a discovery path that can't be read warns with the error code and stays waiting", async () => {
+	await mkdir(join(root, ".ui-pick", "channel.json"), { recursive: true });
+
+	connect();
+
+	await vi.waitFor(() => expect(statuses).toEqual(["waiting"]));
+	expect(warnings).toEqual([expect.stringMatching(/channel\.json: EISDIR/)]);
 });
 
 test("a stream that opens and closes at once is re-checked on the poll timer, not in a loop", async () => {

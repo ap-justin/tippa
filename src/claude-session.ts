@@ -112,6 +112,10 @@ function connectToHelper(root: string, logger: Logger): AgentConnection {
 				headers: { ...auth(target), "content-type": "application/json" },
 				body: JSON.stringify(pick),
 				signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+			}).catch((error: unknown) => {
+				// the helper exited, and its stream's end hasn't been read yet
+				if (isHelperGone(error)) throw new AgentNotConnectedError(LABEL);
+				throw error;
 			});
 			const body = await res.text();
 			if (res.status !== 202) {
@@ -195,6 +199,12 @@ async function findDiscovery(root: string): Promise<Discovery | NoHelper> {
 		if (isAlive(parsed.pid)) return parsed;
 		if (dirname(dir) === dir) return new NoHelper();
 	}
+}
+
+function isHelperGone(error: unknown): boolean {
+	const code = (error as { cause?: { code?: unknown } } | undefined)?.cause
+		?.code;
+	return code === "ECONNREFUSED" || code === "ECONNRESET";
 }
 
 function isHealthy(body: string): boolean {

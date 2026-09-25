@@ -34,7 +34,7 @@ export default defineConfig({
 
 Options: `agent` (required) and `key`, a react-grab `activationKey` string. Leave `key` out to keep react-grab's default.
 
-**2. Register the channel with Claude Code.** In `.mcp.json` at the project root, meaning the folder you start `claude` in:
+**2. Register the channel with Claude Code.** In `.mcp.json` at the project root, meaning the folder you start `claude` in. Keep the server name `ui-pick`: the channel server looks for `server:ui-pick` in Claude's command line.
 
 ```json
 {
@@ -55,7 +55,9 @@ Start Claude from the project root with the channel enabled:
 claude --dangerously-load-development-channels server:ui-pick
 ```
 
-Channels are a Claude Code research preview. Without this flag Claude ignores the channel, and the flag and the channel API may still change.
+The first time you start Claude in the project, it asks "New MCP server found in this project: ui-pick". Choose **Use this MCP server**. If you decline, the channel server never starts and the dev server stays on "waiting for Claude".
+
+Channels are a Claude Code research preview, and the flag and the channel API may still change. A `claude` started in the project without the flag still launches the channel server, because `.mcp.json` lists it, but the server stays inactive: it doesn't listen and doesn't tell the dev server where to find it, so that session can't take picks meant for the one that has the flag.
 
 Start `pnpm dev` too. The order doesn't matter. The dev server prints one of:
 
@@ -79,7 +81,7 @@ The element gets a status badge: sending, sent, working, done, or question. Clau
 Each pick arrives as a `<channel source="ui-pick">` event. Its body holds your note, the component, the source location and the element's HTML. Its attributes are `pick_id`, `component`, `file`, `line` and `screenshot`. The source path is relative to the folder Claude was started in, or absolute when the file is outside that folder. For example, with Claude at the repo root and Vite at `apps/web`:
 
 ```
-<channel source="ui-pick" pick_id="…" component="PriceCard" file="apps/web/src/components/price-card.tsx" line="42" screenshot="/var/folders/…/ui-pick-…/….png">
+<channel source="ui-pick" pick_id="…" component="PriceCard" file="apps/web/src/components/price-card.tsx" line="42" screenshot="/path/to/project/.ui-pick/shots-…/….png">
 make the price bold
 
 component: PriceCard
@@ -91,7 +93,7 @@ html:
 </channel>
 ```
 
-`screenshot` is a PNG of the picked element in a temp folder, deleted when the session ends. Claude tells the channel "working" when it starts, then "done" or "question", and those updates drive the badge and the reply bubble.
+`screenshot` is a PNG of the picked element in `.ui-pick/` inside the project, so Claude can read it without an extra permission prompt. It's deleted when the session ends. Claude tells the channel "working" when it starts, then "done" or "question", and those updates drive the badge and the reply bubble.
 
 ## Security
 
@@ -102,7 +104,6 @@ html:
 
 ## Troubleshooting
 
-- **The dev server says "connected to Claude" but nothing reaches Claude.** Claude was started without `--dangerously-load-development-channels server:ui-pick`. The channel server still runs as a plain MCP server, but Claude ignores its events. Restart Claude with the flag.
-- **It stays on "waiting for Claude".** Check that the `.mcp.json` path points to the built `dist/channel/bin.mjs`, and that Claude was started in the project folder or a parent of the Vite root. `/mcp` in Claude shows whether `ui-pick` is running.
+- **It stays on "waiting for Claude".** Check that Claude was started with `--dangerously-load-development-channels server:ui-pick`: without it the channel server stays inactive, and says so in Claude's MCP log (`claude --debug`). Check that you accepted the "New MCP server found" prompt, that the `.mcp.json` path points to the built `dist/channel/bin.mjs`, and that Claude was started in the project folder or a parent of the Vite root. `/mcp` in Claude shows whether `ui-pick` is running.
 - **`.ui-pick/` in your project.** The channel server creates it. It contains its own `.gitignore`, so git ignores it without any change to yours.
 - **Your app already imports react-grab.** Remove that import. ui-pick starts react-grab itself with telemetry off. With both, whichever copy loads first wins: if it's your app's, your app's react-grab settings, telemetry included, apply.

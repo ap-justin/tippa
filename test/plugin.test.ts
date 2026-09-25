@@ -531,6 +531,9 @@ test("claude's reply reaches the browser as a ui-pick:reply hmr event", async ()
 		timeout: 3000,
 	});
 	const socket = await openHmrSocket(origin);
+	const { config } = await loadClient(origin);
+	await postPick(origin, pick(), { "x-ui-pick-token": config.token });
+	await vi.waitFor(() => expect(helper?.notifications).toHaveLength(1));
 
 	await helper.client.callTool({
 		name: "reply",

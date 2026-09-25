@@ -1,5 +1,6 @@
 import {
 	access,
+	chmod,
 	mkdtemp,
 	readFile,
 	realpath,
@@ -141,19 +142,53 @@ test("a file outside the project keeps its absolute path", async () => {
 	expect(params.meta.file).toBe("/opt/shared/SaveButton.tsx");
 });
 
-test("screenshots go to a private per-session dir, named by the helper, removed on close", async () => {
+test("screenshots go to a private per-session dir in the project's .ui-pick, named by the helper, removed on close", async () => {
 	const body = pick({ pickId: "p_1" });
 	await post("/pick", body);
 	await vi.waitFor(() => expect(notifications).toHaveLength(1));
 	const shot = screenshotOf(notifications[0]);
 
-	expect(dirname(dirname(shot))).toBe(tmpdir());
-	expect(basename(dirname(shot))).toMatch(/^ui-pick-/);
+	expect(dirname(dirname(shot))).toBe(join(cwd, ".ui-pick"));
+	expect(basename(dirname(shot))).toMatch(/^shots-[0-9a-f]+$/);
 	expect((await stat(dirname(shot))).mode & 0o777).toBe(0o700);
 	expect(basename(shot)).not.toContain("p_1");
 
 	await channel.close();
 	await expect(access(dirname(shot))).rejects.toThrow("ENOENT");
+});
+
+test("a screenshot dir removed mid-session is made again for the next pick", async () => {
+	await post("/pick", pick());
+	await vi.waitFor(() => expect(notifications).toHaveLength(1));
+	const first = screenshotOf(notifications[0]);
+	await rm(dirname(first), { recursive: true });
+
+	const res = await post("/pick", pick());
+
+	expect(res.status).toBe(202);
+	await vi.waitFor(() => expect(notifications).toHaveLength(2));
+	const second = screenshotOf(notifications[1]);
+	expect(dirname(second)).toBe(dirname(first));
+	expect(await readFile(second)).toEqual(Buffer.from(PNG_BASE64, "base64"));
+});
+
+test("a screenshot that can't be written answers 500, logs why and emits nothing", async () => {
+	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+	await chmod(join(cwd, ".ui-pick"), 0o500);
+	try {
+		const res = await post("/pick", pick());
+
+		expect(res.status).toBe(500);
+		expect(await res.json()).toEqual({ error: "internal error" });
+		expect(errors).toHaveBeenCalledWith(
+			"ui-pick: request failed",
+			expect.objectContaining({ code: "EACCES" }),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(notifications).toEqual([]);
+	} finally {
+		await chmod(join(cwd, ".ui-pick"), 0o700);
+	}
 });
 
 test("page html is fenced as data and can't close the channel tag or its fence", async () => {
@@ -166,6 +201,21 @@ test("page html is fenced as data and can't close the channel tag or its fence",
 	const fence = content.match(/^(`{4,})html$/m)?.[1];
 	expect(fence).toBeDefined();
 	expect(content.endsWith(`\n${fence}`)).toBe(true);
+});
+
+test("meta attributes carry no quote, angle bracket or control char from the page", async () => {
+	await post(
+		"/pick",
+		pick({
+			component: 'Save" onclick="x\n<Button>',
+			file: join(projectDir, 'src/we"ird<name>.tsx'),
+		}),
+	);
+	await vi.waitFor(() => expect(notifications).toHaveLength(1));
+	const meta = notifications[0]?.params?.meta as Record<string, string>;
+
+	expect(meta.component).toBe("Save__onclick__x__Button_");
+	expect(meta.file).toBe("src/weirdname.tsx");
 });
 
 test("instructions say only the note is the developer's request", () => {
@@ -318,7 +368,22 @@ test("health answers ok to an authed caller", async () => {
 	expect(await res.json()).toEqual({ ok: true });
 });
 
+/** a pick claude has seen, so a reply can name it */
+async function emitPick(pickId: string): Promise<void> {
+	await post("/pick", pick({ pickId }));
+	await vi.waitFor(() =>
+		expect(notifications).toContainEqual(
+			expect.objectContaining({
+				params: expect.objectContaining({
+					meta: expect.objectContaining({ pick_id: pickId }),
+				}),
+			}),
+		),
+	);
+}
+
 test("a reply tool call reaches an open events stream", async () => {
+	await emitPick("p_1");
 	const res = await get("/events");
 	expect(res.status).toBe(200);
 	expect(res.headers.get("content-type")).toBe("text/event-stream");
@@ -349,12 +414,46 @@ test("a reply tool call reaches an open events stream", async () => {
 });
 
 test("a reply with no browser listening is not an error", async () => {
+	await emitPick("p_1");
 	const result = await client.callTool({
 		name: "reply",
 		arguments: { pick_id: "p_1", status: "working", message: "on it" },
 	});
 	expect(result.isError).toBeFalsy();
 });
+
+test.each([
+	["an id this session never emitted", "p_never", /unknown pick_id/],
+	["a malformed id", "../x", /pick_id/],
+])(
+	"a reply to %s is a tool error and reaches no browser",
+	async (_, pickId, text) => {
+		await emitPick("p_1");
+		const res = await get("/events");
+		const reader = res.body?.pipeThrough(new TextDecoderStream()).getReader();
+
+		const result = await client.callTool({
+			name: "reply",
+			arguments: { pick_id: pickId, status: "done", message: "made it red" },
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result.content)).toMatch(text);
+		await client.callTool({
+			name: "reply",
+			arguments: { pick_id: "p_1", status: "done", message: "real" },
+		});
+		let received = "";
+		while (!received.includes("data:")) {
+			const chunk = await reader?.read();
+			if (!chunk || chunk.done) break;
+			received += chunk.value;
+		}
+		await reader?.cancel();
+		expect(received).toContain('"message":"real"');
+		expect(received).not.toContain("made it red");
+	},
+);
 
 const discoveryFile = () => discoveryPath(cwd);
 
