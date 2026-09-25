@@ -1,4 +1,5 @@
 import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -368,4 +369,26 @@ test("closing leaves a newer helper's discovery file in place", async () => {
 	await channel.close();
 	expect((await readDiscovery()).secret).toBe(newerSecret);
 	await newer.close();
+});
+
+test("a client that aborts mid-upload is dropped without an error", async () => {
+	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+	const { port, secret } = await readDiscovery();
+	const upload = httpRequest({
+		host: "127.0.0.1",
+		port,
+		method: "POST",
+		path: "/pick",
+		headers: {
+			"x-ui-pick-secret": secret,
+			"content-length": String(5 * 1024 * 1024),
+		},
+	});
+	upload.on("error", () => {});
+	upload.write("x".repeat(1024 * 1024));
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	upload.destroy();
+	await new Promise((resolve) => setTimeout(resolve, 200));
+
+	expect(errors).not.toHaveBeenCalled();
 });

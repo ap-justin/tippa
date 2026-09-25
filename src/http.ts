@@ -36,3 +36,8 @@ export async function readBody(
 	}
 	return size > limit ? undefined : Buffer.concat(chunks).toString("utf8");
 }
+
+/** the browser went away mid-request: nothing to answer and nothing to report */
+export function isClientAbort(req: IncomingMessage): boolean {
+	return req.destroyed && !req.complete;
+}

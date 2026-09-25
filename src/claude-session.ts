@@ -1,17 +1,26 @@
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { Logger } from "vite";
 import { z } from "zod";
-import type { AgentAdapter, AgentConnection } from "./agent.ts";
+import {
+	type AgentAdapter,
+	type AgentConnection,
+	AgentNotConnectedError,
+} from "./agent.ts";
 import { type Discovery, discoveryPath } from "./channel/discovery.ts";
 import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
 
+const LABEL = "Claude";
 const POLL_MS = 2000;
+const SEND_TIMEOUT_MS = 10_000;
 
 const discoverySchema = z.object({
 	port: z.number().int().positive(),
 	secret: z.string().min(1),
-	pid: z.number().int(),
+	pid: z.number().int().positive(),
 });
+
+const healthSchema = z.object({ ok: z.literal(true) });
 
 const replySchema = z.object({
 	pickId: z.string(),
@@ -24,16 +33,24 @@ const replySchema = z.object({
  * finds the helper through the nearest `.ui-pick/channel.json` at or above vite's root.
  */
 export function claudeSession(): AgentAdapter {
-	return { label: "Claude", connect: ({ root }) => connectToHelper(root) };
+	return {
+		label: LABEL,
+		connect: ({ root, logger }) => connectToHelper(root, logger),
+	};
 }
 
-function connectToHelper(root: string): AgentConnection {
+/** why a check found no helper; logged once per distinct text */
+class NoHelper {
+	constructor(readonly reason?: string) {}
+}
+
+function connectToHelper(root: string, logger: Logger): AgentConnection {
 	const statusListeners = new Set<(status: AgentStatus) => void>();
 	const replyListeners = new Set<(reply: PickReply) => void>();
 	let status: AgentStatus = "waiting";
 	let announced = false;
 	let helper: Discovery | undefined;
-	let events: AbortController | undefined;
+	let inFlight: AbortController | undefined;
 	let timer: NodeJS.Timeout | undefined;
 	let closed = false;
 
@@ -44,46 +61,38 @@ function connectToHelper(root: string): AgentConnection {
 		for (const listener of statusListeners) listener(next);
 	}
 
-	async function check(): Promise<void> {
-		const found = await findDiscovery(root);
-		const listening = found !== undefined && !closed && (await listen(found));
-		if (closed || listening) return;
+	function wait(): void {
+		helper = undefined;
+		inFlight = undefined;
 		setStatus("waiting");
 		timer = setTimeout(check, POLL_MS).unref();
 	}
 
-	/** resolves true once the reply stream is open; a later drop restarts polling */
-	async function listen(found: Discovery): Promise<boolean> {
+	async function check(): Promise<void> {
 		const controller = new AbortController();
-		let stream: ReadableStream<Uint8Array>;
-		try {
-			const health = await fetch(helperUrl(found, "/health"), {
-				headers: auth(found),
-				signal: AbortSignal.timeout(POLL_MS),
-			});
-			if (!health.ok) return false;
-			const res = await fetch(helperUrl(found, "/events"), {
-				headers: auth(found),
-				signal: controller.signal,
-			});
-			if (!res.ok || !res.body) return false;
-			stream = res.body;
-		} catch {
-			return false;
-		}
+		inFlight = controller;
+		const result = await findDiscovery(root)
+			.then((found) =>
+				found instanceof NoHelper ? found : open(found, controller.signal),
+			)
+			.catch((error: unknown) =>
+				controller.signal.aborted
+					? new NoHelper()
+					: new NoHelper(`helper request failed: ${error}`),
+			);
 		if (closed) {
 			controller.abort();
-			return false;
+			return;
 		}
-		helper = found;
-		events = controller;
+		if (result instanceof NoHelper) {
+			if (result.reason) logger.warnOnce(`ui-pick: ${result.reason}`);
+			return wait();
+		}
+		helper = result.discovery;
 		setStatus("connected");
-		void readReplies(stream, emitReply).then(() => {
-			helper = undefined;
-			events = undefined;
-			if (!closed) void check();
+		void readReplies(result.stream, emitReply).then(() => {
+			if (!closed) wait();
 		});
-		return true;
 	}
 
 	function emitReply(reply: PickReply): void {
@@ -104,42 +113,112 @@ function connectToHelper(root: string): AgentConnection {
 		},
 		async send(pick: PickRequest) {
 			const target = helper;
-			if (!target) throw new Error("Claude isn't connected");
+			if (!target) throw new AgentNotConnectedError(LABEL);
 			const res = await fetch(helperUrl(target, "/pick"), {
 				method: "POST",
 				headers: { ...auth(target), "content-type": "application/json" },
 				body: JSON.stringify(pick),
+				signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
 			});
+			const body = await res.text();
 			if (res.status !== 202) {
-				throw new Error(
-					`helper refused the pick (${res.status}): ${await res.text()}`,
-				);
+				throw new Error(`helper refused the pick (${res.status}): ${body}`);
 			}
 		},
 		async close() {
 			closed = true;
 			clearTimeout(timer);
-			events?.abort();
+			inFlight?.abort();
 		},
 	};
 }
 
-/** the nearest discovery file wins; an unreadable one reads as no helper */
-async function findDiscovery(root: string): Promise<Discovery | undefined> {
+/**
+ * checks the port answers as the helper, then opens its reply stream.
+ * `signal` aborts both, and stays attached to the stream for close()
+ */
+async function open(
+	found: Discovery,
+	signal: AbortSignal,
+): Promise<
+	{ discovery: Discovery; stream: ReadableStream<Uint8Array> } | NoHelper
+> {
+	const health = await fetch(helperUrl(found, "/health"), {
+		headers: auth(found),
+		signal: AbortSignal.any([signal, AbortSignal.timeout(POLL_MS)]),
+	});
+	const healthBody = await health.text();
+	if (health.status === 401) {
+		return new NoHelper(
+			"the helper refused channel.json's secret; is another project's helper on that port?",
+		);
+	}
+	// 503: claude hasn't finished its handshake yet; the next poll will see it
+	if (health.status === 503) return new NoHelper();
+	if (!health.ok || !isHealthy(healthBody)) {
+		return new NoHelper(
+			`port ${found.port} from channel.json doesn't answer as the helper; waiting for a fresh one`,
+		);
+	}
+
+	// headers must arrive within POLL_MS; the stream itself stays open until the helper ends it
+	const headers = new AbortController();
+	const headerTimer = setTimeout(() => headers.abort(), POLL_MS);
+	const events = await fetch(helperUrl(found, "/events"), {
+		headers: auth(found),
+		signal: AbortSignal.any([signal, headers.signal]),
+	}).finally(() => clearTimeout(headerTimer));
+	const isStream = events.headers
+		.get("content-type")
+		?.startsWith("text/event-stream");
+	if (!events.ok || !isStream || !events.body) {
+		await events.body?.cancel();
+		return new NoHelper(
+			`port ${found.port} from channel.json doesn't stream as the helper; waiting for a fresh one`,
+		);
+	}
+	return { discovery: found, stream: events.body };
+}
+
+/** the nearest discovery file wins; one whose helper process is gone is skipped */
+async function findDiscovery(root: string): Promise<Discovery | NoHelper> {
 	for (let dir = root; ; dir = dirname(dir)) {
+		const path = discoveryPath(dir);
 		let text: string;
 		try {
-			text = await readFile(discoveryPath(dir), "utf8");
+			text = await readFile(path, "utf8");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
-			if (dirname(dir) === dir) return undefined;
+			const { code } = error as NodeJS.ErrnoException;
+			if (code !== "ENOENT") return new NoHelper(`can't read ${path}: ${code}`);
+			if (dirname(dir) === dir) return new NoHelper();
 			continue;
 		}
+		let parsed: Discovery;
 		try {
-			return discoverySchema.parse(JSON.parse(text));
+			parsed = discoverySchema.parse(JSON.parse(text));
 		} catch {
-			return undefined;
+			return new NoHelper(`${path} is not a valid channel.json`);
 		}
+		if (isAlive(parsed.pid)) return parsed;
+		if (dirname(dir) === dir) return new NoHelper();
+	}
+}
+
+function isHealthy(body: string): boolean {
+	try {
+		return healthSchema.safeParse(JSON.parse(body)).success;
+	} catch {
+		return false;
+	}
+}
+
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// EPERM: alive, owned by another user
+		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
 }
 

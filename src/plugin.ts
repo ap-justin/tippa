@@ -3,9 +3,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Connect, Logger, Plugin } from "vite";
 import { z } from "zod";
-import type { AgentAdapter, AgentConnection } from "./agent.ts";
+import {
+	type AgentAdapter,
+	type AgentConnection,
+	AgentNotConnectedError,
+} from "./agent.ts";
 import { pickSchema } from "./channel/pick.ts";
-import { hasSecretHeader, readBody, sendJson } from "./http.ts";
+import { hasSecretHeader, isClientAbort, readBody, sendJson } from "./http.ts";
 import {
 	type ClientConfig,
 	REPLY_EVENT,
@@ -35,24 +39,36 @@ const pickRequestSchema = pickSchema.extend({
 	screenshot: z.base64().optional(),
 });
 
+interface ServerSession {
+	token: string;
+	connection: AgentConnection;
+}
+
 export function uiPick(options: UiPickOptions): Plugin {
-	let token = "";
-	let connection: AgentConnection | undefined;
+	// keyed by each dev server's client environment: one plugin instance can serve
+	// several servers, and a restart opens the new one before closing the old
+	const sessions = new WeakMap<object, ServerSession>();
 	return {
 		name: NAME,
 		apply: "serve",
 		applyToEnvironment: (environment) =>
 			environment.config.consumer === "client",
-		configResolved() {
+		configResolved(config) {
 			validate(options);
+			if (config.experimental.bundledDev) {
+				config.logger.warnOnce(
+					`[${NAME}] experimental.bundledDev is on; the ui-pick client only loads in the default dev mode`,
+				);
+			}
 		},
 		configureServer(server) {
-			token = randomBytes(32).toString("hex");
+			const token = randomBytes(32).toString("hex");
 			const { agent } = options;
 			const { logger, root } = server.config;
-			const hot = server.environments.client.hot;
+			const client = server.environments.client;
+			const hot = client.hot;
 			const agentConnection = agent.connect({ root, logger });
-			connection = agentConnection;
+			sessions.set(client, { token, connection: agentConnection });
 			agentConnection.onStatus((status) => {
 				logger.info(
 					status === "connected"
@@ -68,7 +84,8 @@ export function uiPick(options: UiPickOptions): Plugin {
 			server.middlewares.use(pickEndpoint(token, agentConnection, logger));
 		},
 		async buildEnd() {
-			await connection?.close();
+			await sessions.get(this.environment)?.connection.close();
+			sessions.delete(this.environment);
 		},
 		transform: {
 			// every dev page with hmr runs vite's client, including ssr frameworks with no index.html
@@ -88,8 +105,10 @@ export function uiPick(options: UiPickOptions): Plugin {
 		load: {
 			filter: { id: new RegExp(`^\0${LOADER_ID}$`) },
 			handler() {
+				const session = sessions.get(this.environment);
+				if (!session) return null;
 				const config: ClientConfig = {
-					token,
+					token: session.token,
 					endpoint: ENDPOINT,
 					...(options.key !== undefined && { key: options.key }),
 				};
@@ -164,6 +183,9 @@ function pickEndpoint(
 		try {
 			await agent.send(parsed.data);
 		} catch (error) {
+			if (error instanceof AgentNotConnectedError) {
+				return sendJson(res, 503, { error: "not_connected" });
+			}
 			logger.error(
 				`[${NAME}] sending pick ${parsed.data.pickId} failed: ${error}`,
 			);
@@ -174,7 +196,9 @@ function pickEndpoint(
 
 	return (req, res, next) => {
 		if (req.url?.split("?")[0] !== ENDPOINT) return next();
-		handle(req, res).catch(next);
+		handle(req, res).catch((error: unknown) => {
+			if (!isClientAbort(req)) next(error);
+		});
 	};
 }
 

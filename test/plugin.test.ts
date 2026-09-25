@@ -6,17 +6,38 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
+import {
+	createServer as createHttpServer,
+	request as httpRequest,
+	type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Notification } from "@modelcontextprotocol/sdk/types.js";
-import { build, createServer, type Logger, type ViteDevServer } from "vite";
+import {
+	build,
+	createServer,
+	type InlineConfig,
+	type Logger,
+	type Plugin,
+	type ViteDevServer,
+} from "vite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { type Channel, startChannel } from "../src/channel/channel.ts";
-import { type Discovery, discoveryPath } from "../src/channel/discovery.ts";
-import { type AgentAdapter, claudeSession, uiPick } from "../src/index.ts";
+import {
+	type Discovery,
+	discoveryPath,
+	writeDiscovery,
+} from "../src/channel/discovery.ts";
+import {
+	type AgentAdapter,
+	AgentNotConnectedError,
+	claudeSession,
+	uiPick,
+} from "../src/index.ts";
 import type { ClientConfig } from "../src/protocol.ts";
 
 let project: string;
@@ -24,6 +45,7 @@ let root: string;
 let server: ViteDevServer | undefined;
 let helper: Helper | undefined;
 let logged: string[];
+let problems: string[];
 
 interface Helper {
 	channel: Channel;
@@ -70,9 +92,9 @@ const logger: Logger = {
 	info: (message) => {
 		if (message.startsWith("ui-pick")) logged.push(message);
 	},
-	warn() {},
-	warnOnce() {},
-	error() {},
+	warn: (message) => problems.push(message),
+	warnOnce: (message) => problems.push(message),
+	error: (message) => problems.push(message),
 	clearScreen() {},
 	hasErrorLogged: () => false,
 	hasWarned: false,
@@ -91,15 +113,31 @@ const idleAgent: AgentAdapter = {
 };
 
 async function serve(agent: AgentAdapter, key?: string): Promise<string> {
-	server = await createServer({
+	server = await startServer(
+		uiPick(key === undefined ? { agent } : { agent, key }),
+	);
+	return originOf(server);
+}
+
+function startServer(
+	plugin: Plugin,
+	extra: InlineConfig = {},
+): Promise<ViteDevServer> {
+	return createServer({
 		root,
 		configFile: false,
 		customLogger: logger,
 		server: { host: "127.0.0.1", port: 0 },
-		plugins: [uiPick(key === undefined ? { agent } : { agent, key })],
+		plugins: [plugin],
+		...extra,
+	}).then(async (started) => {
+		await started.listen();
+		return started;
 	});
-	await server.listen();
-	const address = server.httpServer?.address() as AddressInfo | undefined;
+}
+
+function originOf(started: ViteDevServer): string {
+	const address = started.httpServer?.address() as AddressInfo | undefined;
 	return `http://127.0.0.1:${address?.port}`;
 }
 
@@ -148,6 +186,7 @@ function pick(overrides: Record<string, unknown> = {}) {
 
 beforeEach(async () => {
 	logged = [];
+	problems = [];
 	project = await mkdtemp(join(tmpdir(), "ui-pick-plugin-"));
 	root = join(project, "apps", "web");
 	await mkdir(root, { recursive: true });
@@ -209,15 +248,26 @@ test("every served page loads the ui-pick client and starts it with this server'
 	);
 });
 
-test("a production build carries no ui-pick code or strings", async () => {
+test("a production build carries no ui-pick plugin, code or strings", async () => {
+	let resolvedPlugins: string[] = [];
 	const outDir = join(project, "dist");
 	await build({
 		root,
 		configFile: false,
 		logLevel: "silent",
 		build: { outDir },
-		plugins: [uiPick({ agent: idleAgent })],
+		plugins: [
+			uiPick({ agent: idleAgent }),
+			{
+				name: "spy",
+				configResolved(config) {
+					resolvedPlugins = config.plugins.map((plugin) => plugin.name);
+				},
+			},
+		],
 	});
+	expect(resolvedPlugins).toContain("spy");
+	expect(resolvedPlugins).not.toContain("ui-pick");
 	const files = await readdir(outDir, { recursive: true, withFileTypes: true });
 	const emitted = files.filter((entry) => entry.isFile());
 	expect(emitted.length).toBeGreaterThan(1);
@@ -475,4 +525,144 @@ test("a same-origin browser post passes on sec-fetch-site alone", async () => {
 
 	// past the origin gate: the idle agent isn't connected
 	expect(res.status).toBe(503);
+});
+
+/** a fake helper at the project root: healthy, streaming, with `/pick` answered by `onPick` */
+async function serveFakeHelper(
+	onPick: (res: ServerResponse) => void,
+): Promise<() => Promise<void>> {
+	const secret = "s".repeat(64);
+	const fake = createHttpServer((req, res) => {
+		if (req.url === "/health") return res.end('{"ok":true}');
+		if (req.url === "/events") {
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			return res.flushHeaders();
+		}
+		req.resume();
+		onPick(res);
+	});
+	await new Promise<void>((resolve) => fake.listen(0, "127.0.0.1", resolve));
+	const { port } = fake.address() as AddressInfo;
+	await writeDiscovery(project, { port, secret, pid: process.pid });
+	return async () => {
+		fake.closeAllConnections();
+		await new Promise((resolve) => fake.close(resolve));
+	};
+}
+
+test("a helper that fails the pick answers 502 send_failed and logs why", async () => {
+	const stopFake = await serveFakeHelper((res) => {
+		res.writeHead(500).end("boom");
+	});
+	try {
+		const origin = await serve(claudeSession());
+		await vi.waitFor(() => expect(logged).toEqual([CONNECTED]), {
+			timeout: 3000,
+		});
+		const { config } = await loadClient(origin);
+
+		const res = await postPick(origin, pick(), {
+			"x-ui-pick-token": config.token,
+		});
+
+		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({ error: "send_failed" });
+		expect(problems).toEqual([expect.stringMatching(/p_1.*500/)]);
+	} finally {
+		await server?.close();
+		server = undefined;
+		await stopFake();
+	}
+});
+
+test("a send refused as not connected answers 503, not 502", async () => {
+	const racing: AgentAdapter = {
+		label: "Racing",
+		connect: () => ({
+			status: "connected",
+			onStatus() {},
+			onReply() {},
+			send: async () => {
+				throw new AgentNotConnectedError("Racing");
+			},
+			close: async () => {},
+		}),
+	};
+	const origin = await serve(racing);
+	const { config } = await loadClient(origin);
+
+	const res = await postPick(origin, pick(), {
+		"x-ui-pick-token": config.token,
+	});
+
+	expect(res.status).toBe(503);
+	expect(await res.json()).toEqual({ error: "not_connected" });
+});
+
+test("one plugin instance shared by two dev servers keeps each server's connection", async () => {
+	helper = await startHelper();
+	const plugin = uiPick({ agent: claudeSession() });
+	const firstLogged: string[] = [];
+	const first = await startServer(plugin, {
+		customLogger: {
+			...logger,
+			info: (message) => {
+				if (message.startsWith("ui-pick")) firstLogged.push(message);
+			},
+		},
+	});
+	server = await startServer(plugin);
+	await vi.waitFor(
+		() => {
+			expect(firstLogged).toEqual([CONNECTED]);
+			expect(logged).toEqual([CONNECTED]);
+		},
+		{ timeout: 3000 },
+	);
+
+	await first.close();
+	const { config } = await loadClient(originOf(server));
+	const res = await postPick(originOf(server), pick(), {
+		"x-ui-pick-token": config.token,
+	});
+	expect(res.status).toBe(202);
+
+	await helper.stop();
+	helper = undefined;
+	await vi.waitFor(() => expect(logged).toEqual([CONNECTED, WAITING]));
+	// the closed server's connection went with it
+	expect(firstLogged).toEqual([CONNECTED]);
+});
+
+test("a browser that aborts mid-upload is dropped without an error", async () => {
+	const origin = await serve(idleAgent);
+	const { config } = await loadClient(origin);
+	const { port } = new URL(origin);
+
+	const upload = httpRequest({
+		host: "127.0.0.1",
+		port,
+		method: "POST",
+		path: "/__ui-pick/pick",
+		headers: {
+			origin,
+			"x-ui-pick-token": config.token,
+			"content-type": "application/json",
+			"content-length": String(5 * 1024 * 1024),
+		},
+	});
+	upload.on("error", () => {});
+	upload.write("x".repeat(1024 * 1024));
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	upload.destroy();
+	await new Promise((resolve) => setTimeout(resolve, 200));
+
+	expect(problems).toEqual([]);
+});
+
+test("experimental bundled dev warns that the client won't load", async () => {
+	server = await startServer(uiPick({ agent: idleAgent }), {
+		experimental: { bundledDev: true },
+	});
+	expect(problems).toEqual([expect.stringMatching(/ui-pick.*bundledDev/)]);
 });

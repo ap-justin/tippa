@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
-import { hasSecretHeader, readBody, sendJson } from "../http.ts";
+import { hasSecretHeader, isClientAbort, readBody, sendJson } from "../http.ts";
 import { removeDiscovery, writeDiscovery } from "./discovery.ts";
 import { formatContent, formatMeta, type Pick, pickSchema } from "./pick.ts";
 
@@ -162,6 +162,7 @@ export async function startChannel({
 
 	const http = createServer((req, res) => {
 		handle(req, res).catch((error: unknown) => {
+			if (isClientAbort(req)) return;
 			console.error("ui-pick: request failed", error);
 			if (!res.headersSent) sendJson(res, 500, { error: "internal error" });
 		});

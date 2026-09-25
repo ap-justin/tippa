@@ -19,7 +19,15 @@ export interface AgentConnection {
 	/** called after the first connection check, then once per change */
 	onStatus(listener: (status: AgentStatus) => void): void;
 	onReply(listener: (reply: PickReply) => void): void;
-	/** rejects when the agent refuses or can't be reached */
+	/** rejects with `AgentNotConnectedError` when disconnected, any other error when the agent refuses */
 	send(pick: PickRequest): Promise<void>;
 	close(): Promise<void>;
+}
+
+/** what `send` rejects with when no agent is reachable; the endpoint answers 503 */
+export class AgentNotConnectedError extends Error {
+	constructor(label: string) {
+		super(`${label} isn't connected`);
+		this.name = "AgentNotConnectedError";
+	}
 }
