@@ -14,7 +14,8 @@
 		"noImplicitOverride": true,
 		"exactOptionalPropertyTypes": true,
 		"declaration": true,
-		"noEmit": true
+		"noEmit": true,
+		"allowImportingTsExtensions": true
 	},
 	"include": ["src", "test", "*.config.ts"]
 }
