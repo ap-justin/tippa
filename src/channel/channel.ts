@@ -13,6 +13,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import { hasSecretHeader, isClientAbort, readBody, sendJson } from "../http.ts";
+import { MAX_BODY_BYTES } from "../protocol.ts";
 import { pickReplySchema } from "../schema.ts";
 import { removeDiscovery, writeDiscovery } from "./discovery.ts";
 import {
@@ -23,7 +24,6 @@ import {
 	projectRelative,
 } from "./pick.ts";
 
-const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const KEEPALIVE_MS = 30_000;
 
 const INSTRUCTIONS = [
@@ -133,7 +133,9 @@ export async function startChannel({
 		if (req.method === "POST" && req.url === "/pick") {
 			const body = await readBody(req, MAX_BODY_BYTES);
 			if (body === undefined) {
-				return sendJson(res, 413, { error: "body over 10 MB" });
+				return sendJson(res, 413, {
+					error: `body over ${MAX_BODY_BYTES / 1024 / 1024} MiB`,
+				});
 			}
 			let json: unknown;
 			try {

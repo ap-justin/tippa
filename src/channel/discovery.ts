@@ -1,12 +1,16 @@
 import { readFileSync, rmSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 
-export interface Discovery {
-	port: number;
-	secret: string;
-	pid: number;
-}
+/** `.ui-pick/channel.json`: where the plugin finds the helper */
+export const discoverySchema = z.object({
+	port: z.number().int().positive(),
+	secret: z.string().min(1),
+	pid: z.number().int().positive(),
+});
+
+export type Discovery = z.output<typeof discoverySchema>;
 
 export function discoveryPath(cwd: string): string {
 	return join(cwd, ".ui-pick", "channel.json");

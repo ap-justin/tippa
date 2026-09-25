@@ -7,19 +7,17 @@ import {
 	type AgentConnection,
 	AgentNotConnectedError,
 } from "./agent.ts";
-import { type Discovery, discoveryPath } from "./channel/discovery.ts";
+import {
+	type Discovery,
+	discoveryPath,
+	discoverySchema,
+} from "./channel/discovery.ts";
 import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
 import { pickReplySchema } from "./schema.ts";
 
 const LABEL = "Claude";
 const POLL_MS = 2000;
 const SEND_TIMEOUT_MS = 10_000;
-
-const discoverySchema = z.object({
-	port: z.number().int().positive(),
-	secret: z.string().min(1),
-	pid: z.number().int().positive(),
-});
 
 const healthSchema = z.object({ ok: z.literal(true) });
 

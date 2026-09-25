@@ -5,12 +5,6 @@
 		"types": ["node", "vite/client"]
 	},
 	// the node modules the client and its tests import; tsc lists any that go missing
-	"include": [
-		"src/client",
-		"test/client",
-		"src/protocol.ts",
-		"src/schema.ts",
-		"src/channel/pick.ts"
-	],
+	"include": ["src/client", "test/client", "src/protocol.ts", "src/schema.ts"],
 	"exclude": []
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { pickSchema } from "../../src/channel/pick.ts";
 import { buildPick, newPickId } from "../../src/client/payload.ts";
+import { pickRequestSchema as pickSchema } from "../../src/schema.ts";
 
 // the 8-byte png signature, as a data url the way modern-screenshot returns one
 const PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgo=";

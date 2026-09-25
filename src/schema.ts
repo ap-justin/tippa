@@ -1,12 +1,24 @@
 import { z } from "zod";
+import { MAX_SCREENSHOT_CHARS } from "./protocol.ts";
 
 /** the dev server keeps this many leading chars of a pick's html */
 export const MAX_HTML_CHARS = 4000;
 
+// a `<channel>` tag attribute and the key claude's replies are routed by
+export const pickIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+
+// base64 of the 8-byte png signature and the ihdr length's leading zero bits
+const PNG_BASE64_PREFIX = "iVBORw0KGgo";
+
+/** base64 png; checked by prefix, so it holds in the browser as well as node */
+export const pngBase64Schema = z
+	.base64()
+	.max(MAX_SCREENSHOT_CHARS)
+	.refine((value) => value.startsWith(PNG_BASE64_PREFIX), "not a png");
+
 /** what the browser client posts to the dev server for one pick */
 export const pickRequestSchema = z.object({
-	// becomes a filename, so no path separators or dots
-	pickId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+	pickId: pickIdSchema,
 	note: z.string(),
 	component: z.string(),
 	/** as the client posts it, a vite url; as an agent receives it, an absolute path */
@@ -16,7 +28,7 @@ export const pickRequestSchema = z.object({
 	/** the dev server keeps the first {@link MAX_HTML_CHARS} */
 	html: z.string(),
 	/** base64 png of the picked element */
-	screenshot: z.base64().optional(),
+	screenshot: pngBase64Schema.optional(),
 });
 
 /** what an agent reports back about a pick, sent to the page as the `ui-pick:reply` hmr event */

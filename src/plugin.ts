@@ -12,6 +12,7 @@ import {
 import { hasSecretHeader, isClientAbort, readBody, sendJson } from "./http.ts";
 import {
 	type ClientConfig,
+	MAX_BODY_BYTES,
 	REPLY_EVENT,
 	STATUS_EVENT,
 	STATUS_REQUEST_EVENT,
@@ -27,7 +28,6 @@ export interface UiPickOptions {
 
 const NAME = "ui-pick";
 const ENDPOINT = "/__ui-pick/pick";
-const MAX_BODY_BYTES = 10 * 1024 * 1024;
 // vite's url prefix for files served from outside the root
 const FS_PREFIX = "/@fs/";
 const LOADER_ID = "virtual:ui-pick/client";
@@ -50,9 +50,11 @@ export function uiPick(options: UiPickOptions): Plugin {
 	const sessions = new WeakMap<object, ServerSession>();
 	return {
 		name: NAME,
-		apply: "serve",
-		applyToEnvironment: (environment) =>
-			environment.config.consumer === "client",
+		// vitest and storybook start a dev server from the app's config; picks have no page there
+		apply: (_, env) =>
+			env.command === "serve" && env.mode !== "test" && !process.env.VITEST,
+		// the session and its token are keyed by the `client` environment alone
+		applyToEnvironment: (environment) => environment.name === "client",
 		configResolved(config) {
 			validate(options);
 			if (config.experimental.bundledDev) {
@@ -67,6 +69,11 @@ export function uiPick(options: UiPickOptions): Plugin {
 			const { logger, root } = server.config;
 			const client = server.environments.client;
 			const hot = client.hot;
+			if (isNetworkExposed(server.config.server.host)) {
+				logger.warnOnce(
+					`[${NAME}] the dev server is exposed on the network; ui-pick only accepts picks from this machine`,
+				);
+			}
 			const agentConnection = agent.connect({ root, logger });
 			sessions.set(client, { token, connection: agentConnection });
 			agentConnection.onStatus((status) => {
@@ -124,6 +131,12 @@ export function uiPick(options: UiPickOptions): Plugin {
 	};
 }
 
+/** vite binds `localhost` when `server.host` is unset or false */
+function isNetworkExposed(host: string | boolean | undefined): boolean {
+	if (host === undefined || host === false) return false;
+	return host === true || !(host === "localhost" || isLoopback(host));
+}
+
 function validate(options: UiPickOptions): void {
 	const { agent, key } = options ?? {};
 	if (typeof agent?.connect !== "function") {
@@ -140,7 +153,7 @@ function validate(options: UiPickOptions): void {
 
 /**
  * `POST /__ui-pick/pick` → 202 `{ pickId, status: "sent" }`, or `{ error }` with
- * 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
+ * 403 `forbidden_address`, 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
  * 503 `not_connected`, 502 `send_failed`
  */
 function pickEndpoint({
@@ -155,6 +168,11 @@ function pickEndpoint({
 	logger: Logger;
 }): Connect.NextHandleFunction {
 	async function handle(req: IncomingMessage, res: ServerResponse) {
+		// a network-exposed dev server hands the token to every device that loads the page
+		if (!isLoopback(req.socket.remoteAddress)) {
+			req.resume();
+			return sendJson(res, 403, { error: "forbidden_address" });
+		}
 		if (!isSameOrigin(req)) {
 			req.resume();
 			return sendJson(res, 403, { error: "forbidden_origin" });
@@ -222,6 +240,12 @@ function sourcePath(url: string, root: string): string {
 	return path.startsWith(FS_PREFIX)
 		? path.slice(FS_PREFIX.length - 1)
 		: join(root, path);
+}
+
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+function isLoopback(address: string | undefined): boolean {
+	return address !== undefined && LOOPBACK_ADDRESSES.has(address);
 }
 
 /**

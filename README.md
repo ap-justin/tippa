@@ -95,8 +95,8 @@ html:
 
 ## Security
 
-- **Dev server only.** The plugin is `apply: "serve"`, so `vite build` output contains nothing from ui-pick.
-- **Localhost only.** The channel server listens on `127.0.0.1` and accepts only requests that carry its secret. The secret is stored in `.ui-pick/channel.json` in your project, readable only by your user.
+- **Dev server only.** The plugin applies only to `vite dev`, so `vite build` output contains nothing from ui-pick. It also stays off when Vitest (or anything else running Vite in `test` mode) loads your config.
+- **This machine only.** The dev server accepts picks only from this machine. With `server.host` set (`--host`, Docker, phone testing) other devices can open the app, but their picks are refused, and the dev server warns about it at startup. The channel server listens on `127.0.0.1` and accepts only requests that carry its secret. The secret is stored in `.ui-pick/channel.json` in your project, readable only by your user.
 - **Same page only.** The dev server accepts a pick only from the app's own origin, with a token handed to the page at load, so another site open in your browser can't send one.
 - **No extra permissions.** A pick is a message to Claude. Every edit Claude makes goes through Claude Code's usual permission prompts. Claude treats the HTML and component names as data from the page, not as instructions.
 

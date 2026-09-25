@@ -13,7 +13,7 @@ import {
 	type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -186,6 +186,8 @@ function pick(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(async () => {
+	// the plugin stays out of test runners, and this suite runs in one
+	vi.stubEnv("VITEST", undefined);
 	logged = [];
 	problems = [];
 	project = await mkdtemp(join(tmpdir(), "ui-pick-plugin-"));
@@ -247,6 +249,41 @@ test("every served page loads the ui-pick client and starts it with this server'
 	expect(await getText(`${origin}${clientUrl}`)).toContain(
 		"export function start",
 	);
+});
+
+test.each([
+	["under vitest", () => vi.stubEnv("VITEST", "true"), {}],
+	["in test mode", () => {}, { mode: "test" }],
+])(
+	"%s the plugin stays inert: no agent connection and no client on the page",
+	async (_, arrange, extra: InlineConfig) => {
+		arrange();
+		let connects = 0;
+		const counting: AgentAdapter = {
+			...idleAgent,
+			connect: (context) => {
+				connects++;
+				return idleAgent.connect(context);
+			},
+		};
+		server = await startServer(uiPick({ agent: counting }), extra);
+
+		expect(await getText(`${originOf(server)}/@vite/client`)).not.toContain(
+			"virtual:ui-pick/client",
+		);
+		expect(connects).toBe(0);
+	},
+);
+
+test("only the client environment gets the loader, not another client-consumer environment", async () => {
+	server = await startServer(uiPick({ agent: idleAgent }), {
+		environments: { preview: { consumer: "client" } },
+	});
+	const viteClientIn = async (name: string) =>
+		(await server?.environments[name]?.transformRequest("/@vite/client"))?.code;
+
+	expect(await viteClientIn("client")).toContain("virtual:ui-pick/client");
+	expect(await viteClientIn("preview")).not.toContain("virtual:ui-pick/client");
 });
 
 test("a production build carries no ui-pick plugin, code or strings", async () => {
@@ -446,6 +483,7 @@ test.each([
 	["over 10 MB", pick({ html: "x".repeat(10 * 1024 * 1024) }), 413],
 	["not json", "{", 400],
 	["missing fields", { pickId: "p_1" }, 400],
+	["with a screenshot that isn't a png", pick({ screenshot: "aGVsbG8=" }), 400],
 ])(
 	"a pick body %s is refused before the agent sees it",
 	async (_, body, status) => {
@@ -577,6 +615,41 @@ test.each([
 		expect(await res.json()).toEqual({ error: "forbidden_origin" });
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(helper.notifications).toEqual([]);
+	},
+);
+
+const lanAddress = Object.values(networkInterfaces())
+	.flat()
+	.find(
+		(iface) => iface && !iface.internal && iface.family === "IPv4",
+	)?.address;
+
+test.skipIf(!lanAddress)(
+	"on a network-exposed dev server, a pick from another address is refused with 403 even with the token",
+	async () => {
+		const sent: PickRequest[] = [];
+		server = await startServer(uiPick({ agent: recordingAgent(sent) }), {
+			server: { host: "0.0.0.0", port: 0 },
+		});
+		const { port } = new URL(originOf(server));
+		const lanOrigin = `http://${lanAddress}:${port}`;
+		const { config } = await loadClient(lanOrigin);
+
+		const fromLan = await postPick(lanOrigin, pick(), {
+			"x-ui-pick-token": config.token,
+		});
+		expect(fromLan.status).toBe(403);
+		expect(await fromLan.json()).toEqual({ error: "forbidden_address" });
+		expect(sent).toEqual([]);
+
+		const loopbackOrigin = `http://127.0.0.1:${port}`;
+		const fromLoopback = await postPick(loopbackOrigin, pick(), {
+			"x-ui-pick-token": config.token,
+		});
+		expect(fromLoopback.status).toBe(202);
+		expect(problems).toContainEqual(
+			expect.stringMatching(/ui-pick.*only accepts picks from this machine/),
+		);
 	},
 );
 

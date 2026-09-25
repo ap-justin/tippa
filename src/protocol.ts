@@ -2,7 +2,7 @@ import type { z } from "zod";
 // type-only, so the browser client importing this module never loads zod
 import type { pickReplySchema, pickRequestSchema } from "./schema.ts";
 
-/** what the browser client posts to the dev server for one pick; see `pickRequestSchema` */
+/** see `pickRequestSchema` */
 export type PickRequest = z.output<typeof pickRequestSchema>;
 
 /** payload of the `ui-pick:reply` hmr event */
@@ -24,6 +24,11 @@ export interface ClientConfig {
 	/** pick hotkey; undefined keeps react-grab's default */
 	key?: string;
 }
+
+/** the dev server and the channel helper refuse a pick body past this */
+export const MAX_BODY_BYTES = 10 * 1024 * 1024;
+/** base64 chars a screenshot may take, leaving room in the body for the html and the json around it */
+export const MAX_SCREENSHOT_CHARS = MAX_BODY_BYTES - 2 * 1024 * 1024;
 
 export const REPLY_EVENT = "ui-pick:reply";
 export const STATUS_EVENT = "ui-pick:status";
