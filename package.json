@@ -22,7 +22,7 @@
 	"packageManager": "pnpm@12.4.2",
 	"scripts": {
 		"build": "tsdown",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
 		"lint": "biome check .",
 		"test": "vitest run",
 		"check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
@@ -30,6 +30,8 @@
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.14",
 		"@types/node": "^24.13.6",
+		"modern-screenshot": "4.7.0",
+		"react-grab": "0.2.0",
 		"tsdown": "^0.23.0",
 		"typescript": "^7.0.2",
 		"vite": "^8.3.1",

@@ -17,5 +17,7 @@
 		"noEmit": true,
 		"allowImportingTsExtensions": true
 	},
-	"include": ["src", "test", "*.config.ts"]
+	"include": ["src", "test", "*.config.ts"],
+	// the browser client needs the dom lib, which the node code must not see: tsconfig.client.json
+	"exclude": ["src/client", "test/client"]
 }

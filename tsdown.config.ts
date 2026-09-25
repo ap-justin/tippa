@@ -12,6 +12,12 @@ export default defineConfig([
 		entry: { "client/index": "src/client/index.ts" },
 		format: "esm",
 		platform: "browser",
+		tsconfig: "tsconfig.client.json",
 		dts: true,
+		// the consumer's vite serves this file as-is, so it can't lean on bare imports resolving
+		deps: {
+			alwaysBundle: [/^react-grab(\/|$)/, "modern-screenshot"],
+			onlyBundle: ["react-grab", "modern-screenshot"],
+		},
 	},
 ]);
