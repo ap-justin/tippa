@@ -287,7 +287,7 @@ test("a 503 answered after claude connected leaves send on to retry", async () =
 	await vi.waitFor(() => expect(ui.controller.picks.size).toBe(0));
 	expect(ui.controller.canSend).toBe(true);
 	expect(ui.send.disabled).toBe(false);
-	expect(ui.notice.textContent).toBe("Couldn't reach Claude — send again");
+	expect(ui.notice.textContent).toBe("Couldn't reach Claude. Send again.");
 	expect(ui.composer.hidden).toBe(false);
 });
 

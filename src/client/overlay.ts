@@ -19,7 +19,7 @@ const MAX_CANVAS_SIDE = 10_000;
 // radix's Dialog content sets no aria-modal; its role and open state mark it
 const MODAL =
 	'dialog:modal, [aria-modal="true"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]';
-const RACED_CONNECT = "Couldn't reach Claude — send again";
+const RACED_CONNECT = "Couldn't reach Claude. Send again.";
 const NO_SOURCE =
 	"react-grab found no source file for this element. Try picking its parent component.";
 
