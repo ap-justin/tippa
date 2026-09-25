@@ -1,8 +1,15 @@
 {
-	"name": "ui-pick",
-	"version": "0.0.0",
-	"private": true,
+	"name": "tippa",
+	"version": "0.1.0",
 	"description": "pick an element in a vite react app and send the change request to a running claude code session",
+	"keywords": [
+		"vite-plugin",
+		"claude-code",
+		"mcp",
+		"react"
+	],
+	"license": "MIT",
+	"author": "ap-justin",
 	"type": "module",
 	"exports": {
 		".": {
@@ -11,7 +18,7 @@
 		}
 	},
 	"bin": {
-		"ui-pick-channel": "./dist/channel/bin.mjs"
+		"tippa-channel": "./dist/channel/bin.mjs"
 	},
 	"files": [
 		"dist"

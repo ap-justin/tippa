@@ -4,12 +4,12 @@ import { startChannel, startInertChannel } from "./channel.ts";
 import { channelLaunch } from "./launch.ts";
 
 // the key under `mcpServers` in the project's .mcp.json, as the readme sets it up
-const SERVER_NAME = "ui-pick";
+const SERVER_NAME = "tippa";
 const FLAG = `--dangerously-load-development-channels server:${SERVER_NAME}`;
 
 const INACTIVE = {
-	no_flag: `ui-pick is inactive: picks reach claude only when it's started with ${FLAG}`,
-	unreadable: `ui-pick is inactive: couldn't read the process table (ps) to check that claude was started with ${FLAG}`,
+	no_flag: `tippa is inactive: picks reach claude only when it's started with ${FLAG}`,
+	unreadable: `tippa is inactive: couldn't read the process table (ps) to check that claude was started with ${FLAG}`,
 };
 
 // stdout carries the mcp protocol; logs go to stderr

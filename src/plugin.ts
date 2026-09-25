@@ -19,18 +19,18 @@ import {
 } from "./protocol.ts";
 import { MAX_HTML_CHARS, pickRequestSchema } from "./schema.ts";
 
-export interface UiPickOptions {
+export interface TippaOptions {
 	/** the agent picks are sent to, e.g. `claudeSession()` */
 	agent: AgentAdapter;
 	/** pick hotkey passed to the browser client; defaults to react-grab's */
 	key?: string;
 }
 
-const NAME = "ui-pick";
-const ENDPOINT = "/__ui-pick/pick";
+const NAME = "tippa";
+const ENDPOINT = "/__tippa/pick";
 // vite's url prefix for files served from outside the root
 const FS_PREFIX = "/@fs/";
-const LOADER_ID = "virtual:ui-pick/client";
+const LOADER_ID = "virtual:tippa/client";
 const RESOLVED_LOADER_ID = `\0${LOADER_ID}`;
 // extensionless so vite's resolver finds src/client/index.ts and dist/client/index.js alike
 const CLIENT_ENTRY = fileURLToPath(new URL("./client/index", import.meta.url));
@@ -44,7 +44,7 @@ interface ServerSession {
 	connection: AgentConnection;
 }
 
-export function uiPick(options: UiPickOptions): Plugin {
+export function tippa(options: TippaOptions): Plugin {
 	// keyed by each dev server's client environment: one plugin instance can serve
 	// several servers, and a restart opens the new one before closing the old
 	const sessions = new WeakMap<object, ServerSession>();
@@ -59,7 +59,7 @@ export function uiPick(options: UiPickOptions): Plugin {
 			validate(options);
 			if (config.experimental.bundledDev) {
 				config.logger.warnOnce(
-					`[${NAME}] experimental.bundledDev is on; the ui-pick client only loads in the default dev mode`,
+					`[${NAME}] experimental.bundledDev is on; the tippa client only loads in the default dev mode`,
 				);
 			}
 		},
@@ -71,7 +71,7 @@ export function uiPick(options: UiPickOptions): Plugin {
 			const hot = client.hot;
 			if (isNetworkExposed(server.config.server.host)) {
 				logger.warnOnce(
-					`[${NAME}] the dev server is exposed on the network; ui-pick only accepts picks from this machine`,
+					`[${NAME}] the dev server is exposed on the network; tippa only accepts picks from this machine`,
 				);
 			}
 			const agentConnection = agent.connect({ root, logger });
@@ -79,8 +79,8 @@ export function uiPick(options: UiPickOptions): Plugin {
 			agentConnection.onStatus((status) => {
 				logger.info(
 					status === "connected"
-						? `ui-pick → connected to ${agent.label}`
-						: `ui-pick → waiting for ${agent.label}`,
+						? `tippa → connected to ${agent.label}`
+						: `tippa → waiting for ${agent.label}`,
 				);
 				hot.send(STATUS_EVENT, { status });
 			});
@@ -143,11 +143,11 @@ function isNetworkExposed(host: string | boolean | undefined): boolean {
 	return host === true || !(host === "localhost" || isLoopback(host));
 }
 
-function validate(options: UiPickOptions): void {
+function validate(options: TippaOptions): void {
 	const { agent, key } = options ?? {};
 	if (typeof agent?.connect !== "function") {
 		throw new Error(
-			`[${NAME}] options.agent must be an agent adapter, e.g. uiPick({ agent: claudeSession() })`,
+			`[${NAME}] options.agent must be an agent adapter, e.g. tippa({ agent: claudeSession() })`,
 		);
 	}
 	if (key !== undefined && (typeof key !== "string" || key.length === 0)) {
@@ -158,7 +158,7 @@ function validate(options: UiPickOptions): void {
 }
 
 /**
- * `POST /__ui-pick/pick` → 202 `{ pickId, status: "sent" }`, or `{ error }` with
+ * `POST /__tippa/pick` → 202 `{ pickId, status: "sent" }`, or `{ error }` with
  * 403 `forbidden_address`, 403 `forbidden_forwarded`, 403 `forbidden_origin`, 401 `unauthorized`, 405 `method_not_allowed`, 413 `too_large`, 400 `invalid_pick`,
  * 503 `not_connected`, 502 `send_failed`
  */
@@ -190,7 +190,7 @@ function pickEndpoint({
 			req.resume();
 			return sendJson(res, 403, { error: "forbidden_origin" });
 		}
-		if (!hasSecretHeader(req, "x-ui-pick-token", token)) {
+		if (!hasSecretHeader(req, "x-tippa-token", token)) {
 			req.resume();
 			return sendJson(res, 401, { error: "unauthorized" });
 		}

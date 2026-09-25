@@ -10,7 +10,7 @@ import type { Discovery } from "../src/channel/discovery.ts";
 const BIN = resolve(import.meta.dirname, "../src/channel/bin.ts");
 const CHANNEL_ARGS = [
 	"--dangerously-load-development-channels",
-	"server:ui-pick",
+	"server:tippa",
 ];
 
 const CLAUDE = resolve(import.meta.dirname, "fixtures/claude.mjs");
@@ -41,7 +41,7 @@ function spawnFlagged(dir: string, env: NodeJS.ProcessEnv = process.env) {
 async function discoveryIn(dir: string): Promise<Discovery> {
 	return vi.waitFor(
 		async () =>
-			JSON.parse(await readFile(join(dir, ".ui-pick", "channel.json"), "utf8")),
+			JSON.parse(await readFile(join(dir, ".tippa", "channel.json"), "utf8")),
 		{ timeout: 3000 },
 	);
 }
@@ -61,7 +61,7 @@ async function stop(child: ChildProcess, helperPid: number): Promise<void> {
 let helperPid: number;
 
 beforeEach(async () => {
-	cwd = await mkdtemp(join(tmpdir(), "ui-pick-bin-"));
+	cwd = await mkdtemp(join(tmpdir(), "tippa-bin-"));
 	launcher = spawnFlagged(cwd);
 	helperPid = (await discoveryIn(cwd)).pid;
 });
@@ -81,15 +81,15 @@ test.each([
 	stopHelper();
 	const [code] = await exited;
 	expect(code).toBe(0);
-	await expect(access(join(cwd, ".ui-pick", "channel.json"))).rejects.toThrow(
+	await expect(access(join(cwd, ".tippa", "channel.json"))).rejects.toThrow(
 		"ENOENT",
 	);
-	expect(await readdir(join(cwd, ".ui-pick"))).toEqual([".gitignore"]);
+	expect(await readdir(join(cwd, ".tippa"))).toEqual([".gitignore"]);
 });
 
 test("the helper writes its discovery file under CLAUDE_PROJECT_DIR when claude code sets it", async () => {
-	const projectDir = await mkdtemp(join(tmpdir(), "ui-pick-project-"));
-	const nested = await mkdtemp(join(tmpdir(), "ui-pick-cwd-"));
+	const projectDir = await mkdtemp(join(tmpdir(), "tippa-project-"));
+	const nested = await mkdtemp(join(tmpdir(), "tippa-cwd-"));
 	const other = spawnFlagged(nested, {
 		...process.env,
 		CLAUDE_PROJECT_DIR: projectDir,
@@ -97,7 +97,7 @@ test("the helper writes its discovery file under CLAUDE_PROJECT_DIR when claude 
 	try {
 		const { pid } = await discoveryIn(projectDir);
 		await expect(
-			access(join(nested, ".ui-pick", "channel.json")),
+			access(join(nested, ".tippa", "channel.json")),
 		).rejects.toThrow("ENOENT");
 		await stop(other, pid);
 	} finally {
@@ -149,7 +149,7 @@ async function expectInert(
 	reason: RegExp,
 	{ depth = 1, env }: { depth?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
-	const dir = await mkdtemp(join(tmpdir(), "ui-pick-inert-"));
+	const dir = await mkdtemp(join(tmpdir(), "tippa-inert-"));
 	const child = spawnUnder(claudeArgs, dir, {
 		stderr: "pipe",
 		...(env && { env }),
@@ -164,9 +164,9 @@ async function expectInert(
 
 		expect(await initialize(child)).toMatchObject({
 			id: 1,
-			result: { serverInfo: { name: "ui-pick" } },
+			result: { serverInfo: { name: "tippa" } },
 		});
-		await expect(access(join(dir, ".ui-pick"))).rejects.toThrow("ENOENT");
+		await expect(access(join(dir, ".tippa"))).rejects.toThrow("ENOENT");
 		expect(await listeningPorts(await descendant(child.pid, depth))).toEqual(
 			[],
 		);
@@ -179,10 +179,17 @@ async function expectInert(
 }
 
 const NEEDS_FLAG =
-	/started with --dangerously-load-development-channels server:ui-pick/;
+	/started with --dangerously-load-development-channels server:tippa/;
 
 test("a helper under a claude started without the channel flag stays an mcp server but writes no discovery file and opens no port", async () => {
 	await expectInert([], NEEDS_FLAG);
+});
+
+test("a helper under a claude flagged with the package's former server name stays inert", async () => {
+	await expectInert(
+		["--dangerously-load-development-channels", "server:ui-pick"],
+		NEEDS_FLAG,
+	);
 });
 
 test("a helper under an unflagged claude that a flagged claude started stays inert", async () => {

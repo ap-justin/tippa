@@ -3,7 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
-/** `.ui-pick/channel.json`: where the plugin finds the helper */
+/** `.tippa/channel.json`: where the plugin finds the helper */
 export const discoverySchema = z.object({
 	port: z.number().int().positive(),
 	secret: z.string().min(1),
@@ -12,9 +12,9 @@ export const discoverySchema = z.object({
 
 export type Discovery = z.output<typeof discoverySchema>;
 
-/** `<cwd>/.ui-pick`, the helper's state: discovery file and screenshots */
+/** `<cwd>/.tippa`, the helper's state: discovery file and screenshots */
 export function stateDir(cwd: string): string {
-	return join(cwd, ".ui-pick");
+	return join(cwd, ".tippa");
 }
 
 export function discoveryPath(cwd: string): string {

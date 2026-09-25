@@ -53,7 +53,7 @@ export function startGrab(key: string | undefined, target: PickTarget): void {
 		| undefined;
 
 	grab.registerPlugin({
-		name: "ui-pick",
+		name: "tippa",
 		hooks: {
 			onActivate: () => target.grabbing(true),
 			onDeactivate: async () => {
@@ -74,7 +74,7 @@ export function startGrab(key: string | undefined, target: PickTarget): void {
 		},
 		actions: [
 			{
-				id: "ui-pick-send",
+				id: "tippa-send",
 				label: "Send to Claude",
 				showInToolbarMenu: true,
 				// a pick names one element; greyed out for a drag or multi-select

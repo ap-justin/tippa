@@ -39,7 +39,7 @@ export const pickRequestSchema = z.object({
 	screenshot: pngBase64Schema.optional(),
 });
 
-/** what an agent reports back about a pick, sent to the page as the `ui-pick:reply` hmr event */
+/** what an agent reports back about a pick, sent to the page as the `tippa:reply` hmr event */
 export const pickReplySchema = z.object({
 	pickId: z.string(),
 	status: z.enum(["working", "done", "question"]),

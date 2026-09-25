@@ -76,7 +76,7 @@ class Anchor {
 export function mountOverlay(controller: PickController): PickTarget {
 	const sheet = new CSSStyleSheet();
 	sheet.replaceSync(css);
-	const host = document.createElement("ui-pick-overlay");
+	const host = document.createElement("tippa-overlay");
 	host.setAttribute("data-react-grab-ignore", "");
 	host.setAttribute("data-react-grab-ignore-events", "");
 	// never a grid or flex item in the dialog it moves into; inline and important beat the page's rules

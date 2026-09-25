@@ -35,7 +35,7 @@ const selection: Selection = {
 
 afterEach(() => {
 	for (const node of document.querySelectorAll(
-		"ui-pick-overlay, .picked, .page, .modal",
+		"tippa-overlay, .picked, .page, .modal",
 	))
 		node.remove();
 	popoverCalls.length = 0;
@@ -63,11 +63,11 @@ function respond(status: number) {
 function mount(post = respond(202)) {
 	domToPng.mockResolvedValue(PNG_DATA_URL);
 	const controller = new PickController(
-		{ token: "t0ken", endpoint: "/__ui-pick/pick" },
+		{ token: "t0ken", endpoint: "/__tippa/pick" },
 		post,
 	);
 	const overlay = mountOverlay(controller);
-	const host = document.querySelector<HTMLElement>("ui-pick-overlay");
+	const host = document.querySelector<HTMLElement>("tippa-overlay");
 	const root = host?.shadowRoot;
 	if (!host || !root) throw new Error("overlay not mounted");
 	const query = <T extends Element>(selector: string): T => {

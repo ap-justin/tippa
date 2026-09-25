@@ -50,7 +50,7 @@ async function post(
 		method: "POST",
 		headers: {
 			"content-type": "application/json",
-			"x-ui-pick-secret": secret,
+			"x-tippa-secret": secret,
 			...headers,
 		},
 		body: typeof body === "string" ? body : JSON.stringify(body),
@@ -72,7 +72,7 @@ function pick(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(async () => {
-	cwd = await mkdtemp(join(tmpdir(), "ui-pick-test-"));
+	cwd = await mkdtemp(join(tmpdir(), "tippa-test-"));
 	projectDir = await realpath(cwd);
 	const [clientTransport, serverTransport] =
 		InMemoryTransport.createLinkedPair();
@@ -145,13 +145,13 @@ test("a file outside the project keeps its absolute path", async () => {
 	expect(params.meta.file).toBe("/opt/shared/SaveButton.tsx");
 });
 
-test("screenshots go to a private per-session dir in the project's .ui-pick, named by the helper, removed on close", async () => {
+test("screenshots go to a private per-session dir in the project's .tippa, named by the helper, removed on close", async () => {
 	const body = pick({ pickId: "p_1" });
 	await post("/pick", body);
 	await vi.waitFor(() => expect(notifications).toHaveLength(1));
 	const shot = screenshotOf(notifications[0]);
 
-	expect(dirname(dirname(shot))).toBe(join(cwd, ".ui-pick"));
+	expect(dirname(dirname(shot))).toBe(join(cwd, ".tippa"));
 	expect(basename(dirname(shot))).toMatch(
 		new RegExp(`^shots-${process.pid}-[0-9a-f]{16}$`),
 	);
@@ -179,29 +179,29 @@ test("a screenshot dir removed mid-session is made again for the next pick", asy
 
 test("a screenshot that can't be written answers 500, logs why and emits nothing", async () => {
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-	await chmod(join(cwd, ".ui-pick"), 0o500);
+	await chmod(join(cwd, ".tippa"), 0o500);
 	try {
 		const res = await post("/pick", pick());
 
 		expect(res.status).toBe(500);
 		expect(await res.json()).toEqual({ error: "internal error" });
 		expect(errors).toHaveBeenCalledWith(
-			"ui-pick: request failed",
+			"tippa: request failed",
 			expect.objectContaining({ code: "EACCES" }),
 		);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(notifications).toEqual([]);
 	} finally {
-		await chmod(join(cwd, ".ui-pick"), 0o700);
+		await chmod(join(cwd, ".tippa"), 0o700);
 	}
 });
 
 test("at startup, screenshot dirs left by helpers that are gone are removed and live ones kept", async () => {
-	const other = await mkdtemp(join(tmpdir(), "ui-pick-test-"));
+	const other = await mkdtemp(join(tmpdir(), "tippa-test-"));
 	const gone = spawn(process.execPath, ["-e", ""]);
 	await once(gone, "exit");
-	const dead = join(other, ".ui-pick", `shots-${gone.pid}-00`);
-	const live = join(other, ".ui-pick", `shots-${process.pid}-00`);
+	const dead = join(other, ".tippa", `shots-${gone.pid}-00`);
+	const live = join(other, ".tippa", `shots-${process.pid}-00`);
 	await mkdir(dead, { recursive: true });
 	await mkdir(live, { recursive: true });
 	const [, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -263,7 +263,7 @@ test.each([
 		const headers: Record<string, string> = {
 			"content-type": "application/json",
 		};
-		if (secret !== undefined) headers["x-ui-pick-secret"] = secret;
+		if (secret !== undefined) headers["x-tippa-secret"] = secret;
 		const res = await fetch(`http://127.0.0.1:${port}/pick`, {
 			method: "POST",
 			headers,
@@ -333,14 +333,14 @@ test.each([["/events"], ["/health"]])(
 );
 
 test("before claude finishes the handshake, health and picks answer 503", async () => {
-	const other = await mkdtemp(join(tmpdir(), "ui-pick-test-"));
+	const other = await mkdtemp(join(tmpdir(), "tippa-test-"));
 	const [clientTransport, serverTransport] =
 		InMemoryTransport.createLinkedPair();
 	const early = await startChannel({ cwd: other, transport: serverTransport });
 	const { port, secret } = JSON.parse(
 		await readFile(discoveryPath(other), "utf8"),
 	) as Discovery;
-	const headers = { "x-ui-pick-secret": secret };
+	const headers = { "x-tippa-secret": secret };
 	try {
 		const health = await fetch(`http://127.0.0.1:${port}/health`, { headers });
 		expect(health.status).toBe(503);
@@ -386,7 +386,7 @@ test("an open events stream gets a keepalive comment every 30 s", async () => {
 async function get(path: string): Promise<Response> {
 	const { port, secret } = await readDiscovery();
 	return fetch(`http://127.0.0.1:${port}${path}`, {
-		headers: { "x-ui-pick-secret": secret },
+		headers: { "x-tippa-secret": secret },
 	});
 }
 
@@ -486,9 +486,7 @@ test.each([
 const discoveryFile = () => discoveryPath(cwd);
 
 test("the discovery dir ignores itself, so the secret stays out of the app's git", async () => {
-	expect(await readFile(join(cwd, ".ui-pick", ".gitignore"), "utf8")).toBe(
-		"*\n",
-	);
+	expect(await readFile(join(cwd, ".tippa", ".gitignore"), "utf8")).toBe("*\n");
 });
 
 test("releaseSync removes the discovery file and screenshots without awaiting", async () => {
@@ -533,7 +531,7 @@ test("a client that aborts mid-upload is dropped without an error", async () => 
 		method: "POST",
 		path: "/pick",
 		headers: {
-			"x-ui-pick-secret": secret,
+			"x-tippa-secret": secret,
 			"content-length": String(5 * 1024 * 1024),
 		},
 	});

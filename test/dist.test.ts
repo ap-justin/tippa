@@ -67,24 +67,24 @@ async function getText(url: string): Promise<string> {
 
 test("the built plugin serves its built client and every chunk it imports to an app outside the package", async () => {
 	vi.stubEnv("VITEST", undefined);
-	const { uiPick } = (await import(
+	const { tippa } = (await import(
 		pathToFileURL(DIST_ENTRY).href
 	)) as typeof import("../src/index.ts");
-	root = await mkdtemp(join(tmpdir(), "ui-pick-consumer-"));
+	root = await mkdtemp(join(tmpdir(), "tippa-consumer-"));
 	await writeFile(join(root, "index.html"), "<!doctype html><p>app</p>");
 	server = await createServer({
 		root,
 		configFile: false,
 		logLevel: "silent",
 		server: { host: "127.0.0.1", port: 0 },
-		plugins: [uiPick({ agent: idleAgent })],
+		plugins: [tippa({ agent: idleAgent })],
 	});
 	await server.listen();
 	const address = server.httpServer?.address() as AddressInfo | undefined;
 	const origin = `http://127.0.0.1:${address?.port}`;
 
 	const viteClient = await getText(`${origin}/@vite/client`);
-	const loaderUrl = viteClient.match(/import\("([^"]*ui-pick[^"]*)"\)/)?.[1];
+	const loaderUrl = viteClient.match(/import\("([^"]*tippa[^"]*)"\)/)?.[1];
 	const loader = await getText(`${origin}${loaderUrl}`);
 	const clientUrl = loader.match(/from "(\/@fs\/[^"]+)"/)?.[1];
 	expect(clientUrl).toMatch(/\/dist\/client\/index\.js$/);

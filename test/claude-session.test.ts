@@ -80,7 +80,7 @@ function connect(): AgentConnection {
 }
 
 beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "ui-pick-session-"));
+	root = await mkdtemp(join(tmpdir(), "tippa-session-"));
 	requests = [];
 	warnings = [];
 	statuses = [];
@@ -122,13 +122,13 @@ test("a reused port answering 200 to everything stays waiting, polled at a bound
 	expect(statuses).toEqual(["waiting"]);
 	expect(requests.length).toBeLessThanOrEqual(4);
 	expect(warnings).toHaveLength(1);
-	expect(warnings[0]).toMatch(/ui-pick/);
+	expect(warnings[0]).toMatch(/tippa/);
 });
 
 test("a wrong secret stays waiting and warns once", async () => {
 	await serveFake((_, res) => {
 		res.writeHead(401, { "content-type": "application/json" });
-		res.end('{"error":"missing or wrong x-ui-pick-secret"}');
+		res.end('{"error":"missing or wrong x-tippa-secret"}');
 	});
 
 	connect();
@@ -141,7 +141,7 @@ test("a wrong secret stays waiting and warns once", async () => {
 test("a corrupt discovery file warns once and stays waiting", async () => {
 	await serveFake(helperLike(() => {}));
 	const { writeFile } = await import("node:fs/promises");
-	await writeFile(join(root, ".ui-pick", "channel.json"), "{nope");
+	await writeFile(join(root, ".tippa", "channel.json"), "{nope");
 
 	connect();
 
@@ -239,7 +239,7 @@ test("a helper that never answers a pick times the send out after 10 s", async (
 });
 
 test("a discovery path that can't be read warns with the error code and stays waiting", async () => {
-	await mkdir(join(root, ".ui-pick", "channel.json"), { recursive: true });
+	await mkdir(join(root, ".tippa", "channel.json"), { recursive: true });
 
 	connect();
 

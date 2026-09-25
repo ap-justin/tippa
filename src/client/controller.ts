@@ -74,7 +74,7 @@ export class PickController {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
-				"x-ui-pick-token": this.#config.token,
+				"x-tippa-token": this.#config.token,
 			},
 			body: JSON.stringify(pick),
 		}).then(toOutcome, unreachable);

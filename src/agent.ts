@@ -1,9 +1,9 @@
 import type { Logger } from "vite";
 import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
 
-/** how ui-pick reaches a coding agent; `claudeSession()` is one */
+/** how tippa reaches a coding agent; `claudeSession()` is one */
 export interface AgentAdapter {
-	/** shown in the status line: `ui-pick → connected to <label>` */
+	/** shown in the status line: `tippa → connected to <label>` */
 	label: string;
 	connect(context: AgentContext): AgentConnection;
 }

@@ -6,7 +6,7 @@ import {
 	STATUS_EVENT,
 } from "../../src/protocol.ts";
 
-const config = { token: "t0ken", endpoint: "/__ui-pick/pick" };
+const config = { token: "t0ken", endpoint: "/__tippa/pick" };
 
 function pick(pickId: string): PickRequest {
 	return {
@@ -32,9 +32,9 @@ test("posts the pick with the token header and marks it sent on 202", async () =
 	expect(outcome).toEqual({ ok: true });
 	expect(controller.picks.get("a")).toEqual({ badge: "sent" });
 	const [url, init] = post.mock.calls[0] ?? [];
-	expect(url).toBe("/__ui-pick/pick");
+	expect(url).toBe("/__tippa/pick");
 	expect(init?.method).toBe("POST");
-	expect(new Headers(init?.headers).get("x-ui-pick-token")).toBe("t0ken");
+	expect(new Headers(init?.headers).get("x-tippa-token")).toBe("t0ken");
 	expect(new Headers(init?.headers).get("content-type")).toBe(
 		"application/json",
 	);

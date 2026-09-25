@@ -37,7 +37,7 @@ import {
 	type AgentAdapter,
 	AgentNotConnectedError,
 	claudeSession,
-	uiPick,
+	tippa,
 } from "../src/index.ts";
 import type { ClientConfig, PickRequest } from "../src/protocol.ts";
 
@@ -74,7 +74,7 @@ async function startHelper(): Promise<Helper> {
 	) as Discovery;
 	await vi.waitFor(async () => {
 		const res = await fetch(`http://127.0.0.1:${port}/health`, {
-			headers: { "x-ui-pick-secret": secret },
+			headers: { "x-tippa-secret": secret },
 		});
 		expect(res.status).toBe(200);
 	});
@@ -91,7 +91,7 @@ async function startHelper(): Promise<Helper> {
 
 const logger: Logger = {
 	info: (message) => {
-		if (message.startsWith("ui-pick")) logged.push(message);
+		if (message.startsWith("tippa")) logged.push(message);
 	},
 	warn: (message) => problems.push(message),
 	warnOnce: (message) => problems.push(message),
@@ -115,7 +115,7 @@ const idleAgent: AgentAdapter = {
 
 async function serve(agent: AgentAdapter, key?: string): Promise<string> {
 	server = await startServer(
-		uiPick(key === undefined ? { agent } : { agent, key }),
+		tippa(key === undefined ? { agent } : { agent, key }),
 	);
 	return originOf(server);
 }
@@ -148,10 +148,10 @@ async function getText(url: string): Promise<string> {
 	return res.text();
 }
 
-/** follows the page's own chain: /@vite/client → the ui-pick loader → its start() config */
+/** follows the page's own chain: /@vite/client → the tippa loader → its start() config */
 async function loadClient(origin: string) {
 	const viteClient = await getText(`${origin}/@vite/client`);
-	const loaderUrl = viteClient.match(/import\("([^"]*ui-pick[^"]*)"\)/)?.[1];
+	const loaderUrl = viteClient.match(/import\("([^"]*tippa[^"]*)"\)/)?.[1];
 	expect(loaderUrl).toBeDefined();
 	const loader = await getText(`${origin}${loaderUrl}`);
 	const config: ClientConfig = JSON.parse(
@@ -165,7 +165,7 @@ function postPick(
 	body: unknown,
 	headers: Record<string, string>,
 ): Promise<Response> {
-	return fetch(`${origin}/__ui-pick/pick`, {
+	return fetch(`${origin}/__tippa/pick`, {
 		method: "POST",
 		// a same-origin browser post carries its own origin
 		headers: { "content-type": "application/json", origin, ...headers },
@@ -190,7 +190,7 @@ beforeEach(async () => {
 	vi.stubEnv("VITEST", undefined);
 	logged = [];
 	problems = [];
-	project = await mkdtemp(join(tmpdir(), "ui-pick-plugin-"));
+	project = await mkdtemp(join(tmpdir(), "tippa-plugin-"));
 	root = join(project, "apps", "web");
 	await mkdir(root, { recursive: true });
 	await writeFile(
@@ -209,9 +209,9 @@ afterEach(async () => {
 });
 
 test.each([
-	["no agent", {}, /\[ui-pick\].*agent/],
-	["an agent without connect", { agent: {} }, /\[ui-pick\].*agent/],
-	["an empty key", { agent: claudeSession(), key: "" }, /\[ui-pick\].*key/],
+	["no agent", {}, /\[tippa\].*agent/],
+	["an agent without connect", { agent: {} }, /\[tippa\].*agent/],
+	["an empty key", { agent: claudeSession(), key: "" }, /\[tippa\].*key/],
 ])(
 	"%s fails the dev server at startup, naming the plugin",
 	async (_, options, message) => {
@@ -220,13 +220,13 @@ test.each([
 				root,
 				configFile: false,
 				logLevel: "silent",
-				plugins: [uiPick(options as { agent: AgentAdapter })],
+				plugins: [tippa(options as { agent: AgentAdapter })],
 			}),
 		).rejects.toThrow(message);
 	},
 );
 
-test("every served page loads the ui-pick client and starts it with this server's token", async () => {
+test("every served page loads the tippa client and starts it with this server's token", async () => {
 	const origin = await serve(idleAgent, "Alt+C");
 
 	// any page with hmr loads /@vite/client, spa or ssr framework alike
@@ -234,12 +234,12 @@ test("every served page loads the ui-pick client and starts it with this server'
 	const { config, loader } = await loadClient(origin);
 	expect(config).toEqual({
 		token: expect.stringMatching(/^[0-9a-f]{64}$/),
-		endpoint: "/__ui-pick/pick",
+		endpoint: "/__tippa/pick",
 		key: "Alt+C",
 	});
 
 	// asked after start() subscribed, so the answer has a listener
-	expect(loader.indexOf('send("ui-pick:status-request")')).toBeGreaterThan(
+	expect(loader.indexOf('send("tippa:status-request")')).toBeGreaterThan(
 		loader.indexOf("start("),
 	);
 
@@ -266,27 +266,27 @@ test.each([
 				return idleAgent.connect(context);
 			},
 		};
-		server = await startServer(uiPick({ agent: counting }), extra);
+		server = await startServer(tippa({ agent: counting }), extra);
 
 		expect(await getText(`${originOf(server)}/@vite/client`)).not.toContain(
-			"virtual:ui-pick/client",
+			"virtual:tippa/client",
 		);
 		expect(connects).toBe(0);
 	},
 );
 
 test("only the client environment gets the loader, not another client-consumer environment", async () => {
-	server = await startServer(uiPick({ agent: idleAgent }), {
+	server = await startServer(tippa({ agent: idleAgent }), {
 		environments: { preview: { consumer: "client" } },
 	});
 	const viteClientIn = async (name: string) =>
 		(await server?.environments[name]?.transformRequest("/@vite/client"))?.code;
 
-	expect(await viteClientIn("client")).toContain("virtual:ui-pick/client");
-	expect(await viteClientIn("preview")).not.toContain("virtual:ui-pick/client");
+	expect(await viteClientIn("client")).toContain("virtual:tippa/client");
+	expect(await viteClientIn("preview")).not.toContain("virtual:tippa/client");
 });
 
-test("a production build carries no ui-pick plugin, code or strings", async () => {
+test("a production build carries no tippa plugin, code or strings", async () => {
 	let resolvedPlugins: string[] = [];
 	const outDir = join(project, "dist");
 	await build({
@@ -295,7 +295,7 @@ test("a production build carries no ui-pick plugin, code or strings", async () =
 		logLevel: "silent",
 		build: { outDir },
 		plugins: [
-			uiPick({ agent: idleAgent }),
+			tippa({ agent: idleAgent }),
 			{
 				name: "spy",
 				configResolved(config) {
@@ -305,18 +305,18 @@ test("a production build carries no ui-pick plugin, code or strings", async () =
 		],
 	});
 	expect(resolvedPlugins).toContain("spy");
-	expect(resolvedPlugins).not.toContain("ui-pick");
+	expect(resolvedPlugins).not.toContain("tippa");
 	const files = await readdir(outDir, { recursive: true, withFileTypes: true });
 	const emitted = files.filter((entry) => entry.isFile());
 	expect(emitted.length).toBeGreaterThan(1);
 	for (const file of emitted) {
 		const text = await readFile(join(file.parentPath, file.name), "utf8");
-		expect(text, file.name).not.toMatch(/ui-pick|uiPick|x-ui-pick-token/);
+		expect(text, file.name).not.toMatch(/tippa|tippa|x-tippa-token/);
 	}
 });
 
-const CONNECTED = "ui-pick → connected to Claude";
-const WAITING = "ui-pick → waiting for Claude";
+const CONNECTED = "tippa → connected to Claude";
+const WAITING = "tippa → waiting for Claude";
 
 test("a vite root nested under the project finds the running helper and connects", async () => {
 	helper = await startHelper();
@@ -368,7 +368,7 @@ test("a pick posted with the page's token reaches claude with its html cut to 40
 
 	const html = `<div>${"x".repeat(5000)}</div>`;
 	const res = await postPick(origin, pick({ html }), {
-		"x-ui-pick-token": config.token,
+		"x-tippa-token": config.token,
 	});
 
 	expect(res.status).toBe(202);
@@ -418,7 +418,7 @@ test.each([
 	const { config } = await loadClient(origin);
 
 	const res = await postPick(origin, pick({ file }), {
-		"x-ui-pick-token": config.token,
+		"x-tippa-token": config.token,
 	});
 
 	expect(res.status).toBe(202);
@@ -456,7 +456,7 @@ test("a nested module's map-relative source resolves against the module's own di
 			file: sourceFile,
 			moduleUrl: `${origin}/src/ui/Button.tsx?t=123`,
 		}),
-		{ "x-ui-pick-token": config.token },
+		{ "x-tippa-token": config.token },
 	);
 
 	expect(res.status).toBe(202);
@@ -481,7 +481,7 @@ test("an absolute source passes through unchanged", async () => {
 			file: "/opt/shared/Button.tsx",
 			moduleUrl: "/src/ui/Button.tsx",
 		}),
-		{ "x-ui-pick-token": config.token },
+		{ "x-tippa-token": config.token },
 	);
 
 	expect(res.status).toBe(202);
@@ -512,7 +512,7 @@ test.each([
 				file: encodeSource(sourceFile),
 				moduleUrl: `${origin}${url}?t=1`,
 			}),
-			{ "x-ui-pick-token": config.token },
+			{ "x-tippa-token": config.token },
 		);
 
 		expect(res.status).toBe(202);
@@ -526,7 +526,7 @@ test("a module served through /@fs/ from outside the root resolves to its own di
 	const sent: PickRequest[] = [];
 	const projectDir = await realpath(project);
 	const shared = join(projectDir, "packages", "ui");
-	server = await startServer(uiPick({ agent: recordingAgent(sent) }), {
+	server = await startServer(tippa({ agent: recordingAgent(sent) }), {
 		server: { host: "127.0.0.1", port: 0, fs: { allow: [projectDir] } },
 	});
 	const origin = originOf(server);
@@ -541,7 +541,7 @@ test("a module served through /@fs/ from outside the root resolves to its own di
 	const res = await postPick(
 		origin,
 		pick({ file: sourceFile, moduleUrl: `${origin}${url}?t=5` }),
-		{ "x-ui-pick-token": config.token },
+		{ "x-tippa-token": config.token },
 	);
 
 	expect(res.status).toBe(202);
@@ -569,7 +569,7 @@ test.each([
 			origin,
 			pick({ file: "Button.tsx", moduleUrl }),
 			{
-				"x-ui-pick-token": config.token,
+				"x-tippa-token": config.token,
 			},
 		);
 
@@ -599,7 +599,7 @@ test("claude at the project root reads a nested vite root's file relative to its
 			moduleUrl: `${origin}/src/ui/Button.tsx?t=1`,
 			line: 7,
 		}),
-		{ "x-ui-pick-token": config.token },
+		{ "x-tippa-token": config.token },
 	);
 
 	await vi.waitFor(() => expect(helper?.notifications).toHaveLength(1));
@@ -613,7 +613,7 @@ test("claude at the project root reads a nested vite root's file relative to its
 
 test.each([
 	["no token", {}],
-	["a wrong token", { "x-ui-pick-token": "0".repeat(64) }],
+	["a wrong token", { "x-tippa-token": "0".repeat(64) }],
 ])(
 	"a pick with %s is refused with 401 and never forwarded",
 	async (_, headers) => {
@@ -637,7 +637,7 @@ test("a pick while claude isn't connected answers 503 not_connected", async () =
 	const { config } = await loadClient(origin);
 
 	const res = await postPick(origin, pick(), {
-		"x-ui-pick-token": config.token,
+		"x-tippa-token": config.token,
 	});
 
 	expect(res.status).toBe(503);
@@ -656,7 +656,7 @@ test.each([
 		const { config } = await loadClient(origin);
 
 		const res = await postPick(origin, body, {
-			"x-ui-pick-token": config.token,
+			"x-tippa-token": config.token,
 		});
 
 		expect(res.status).toBe(status);
@@ -664,7 +664,7 @@ test.each([
 	},
 );
 
-/** a browser's hmr socket to the dev server, collecting ui-pick's custom events */
+/** a browser's hmr socket to the dev server, collecting tippa's custom events */
 async function openHmrSocket(origin: string) {
 	const ws = new WebSocket(
 		`${origin.replace("http", "ws")}/?token=${server?.config.webSocketToken}`,
@@ -673,7 +673,7 @@ async function openHmrSocket(origin: string) {
 	const received: { event: string; data: unknown }[] = [];
 	ws.addEventListener("message", (message) => {
 		const payload = JSON.parse(String(message.data));
-		if (payload.type === "custom" && payload.event.startsWith("ui-pick:")) {
+		if (payload.type === "custom" && payload.event.startsWith("tippa:")) {
 			received.push({ event: payload.event, data: payload.data });
 		}
 	});
@@ -689,7 +689,7 @@ async function openHmrSocket(origin: string) {
 	};
 }
 
-test("claude's reply reaches the browser as a ui-pick:reply hmr event", async () => {
+test("claude's reply reaches the browser as a tippa:reply hmr event", async () => {
 	helper = await startHelper();
 	const origin = await serve(claudeSession());
 	await vi.waitFor(() => expect(logged).toEqual([CONNECTED]), {
@@ -697,7 +697,7 @@ test("claude's reply reaches the browser as a ui-pick:reply hmr event", async ()
 	});
 	const socket = await openHmrSocket(origin);
 	const { config } = await loadClient(origin);
-	await postPick(origin, pick(), { "x-ui-pick-token": config.token });
+	await postPick(origin, pick(), { "x-tippa-token": config.token });
 	await vi.waitFor(() => expect(helper?.notifications).toHaveLength(1));
 
 	await helper.client.callTool({
@@ -707,7 +707,7 @@ test("claude's reply reaches the browser as a ui-pick:reply hmr event", async ()
 
 	await vi.waitFor(() =>
 		expect(socket.received).toContainEqual({
-			event: "ui-pick:reply",
+			event: "tippa:reply",
 			data: { pickId: "p_1", status: "done", message: "made it red" },
 		}),
 	);
@@ -722,11 +722,11 @@ test("a browser that connects late learns the current status by asking", async (
 	});
 	const socket = await openHmrSocket(origin);
 
-	socket.send("ui-pick:status-request");
+	socket.send("tippa:status-request");
 
 	await vi.waitFor(() =>
 		expect(socket.received).toEqual([
-			{ event: "ui-pick:status", data: { status: "connected" } },
+			{ event: "tippa:status", data: { status: "connected" } },
 		]),
 	);
 	socket.close();
@@ -745,7 +745,7 @@ test("status changes are pushed to open pages", async () => {
 
 	await vi.waitFor(() =>
 		expect(socket.received).toEqual([
-			{ event: "ui-pick:status", data: { status: "waiting" } },
+			{ event: "tippa:status", data: { status: "waiting" } },
 		]),
 	);
 	socket.close();
@@ -766,13 +766,13 @@ test.each([
 		});
 		const { config } = await loadClient(origin);
 
-		const res = await fetch(`${origin}/__ui-pick/pick`, {
+		const res = await fetch(`${origin}/__tippa/pick`, {
 			method: "POST",
 			headers: Object.fromEntries(
 				Object.entries({
 					"content-type": "application/json",
 					origin,
-					"x-ui-pick-token": config.token,
+					"x-tippa-token": config.token,
 					...headers,
 				}).filter((entry): entry is [string, string] => entry[1] !== undefined),
 			),
@@ -796,7 +796,7 @@ test.skipIf(!lanAddress)(
 	"on a network-exposed dev server, a pick from another address is refused with 403 even with the token",
 	async () => {
 		const sent: PickRequest[] = [];
-		server = await startServer(uiPick({ agent: recordingAgent(sent) }), {
+		server = await startServer(tippa({ agent: recordingAgent(sent) }), {
 			server: { host: "0.0.0.0", port: 0 },
 		});
 		const { port } = new URL(originOf(server));
@@ -804,7 +804,7 @@ test.skipIf(!lanAddress)(
 		const { config } = await loadClient(lanOrigin);
 
 		const fromLan = await postPick(lanOrigin, pick(), {
-			"x-ui-pick-token": config.token,
+			"x-tippa-token": config.token,
 		});
 		expect(fromLan.status).toBe(403);
 		expect(await fromLan.json()).toEqual({ error: "forbidden_address" });
@@ -812,11 +812,11 @@ test.skipIf(!lanAddress)(
 
 		const loopbackOrigin = `http://127.0.0.1:${port}`;
 		const fromLoopback = await postPick(loopbackOrigin, pick(), {
-			"x-ui-pick-token": config.token,
+			"x-tippa-token": config.token,
 		});
 		expect(fromLoopback.status).toBe(202);
 		expect(problems).toContainEqual(
-			expect.stringMatching(/ui-pick.*only accepts picks from this machine/),
+			expect.stringMatching(/tippa.*only accepts picks from this machine/),
 		);
 	},
 );
@@ -834,7 +834,7 @@ test.each([
 		const { config } = await loadClient(origin);
 
 		const res = await postPick(origin, pick(), {
-			"x-ui-pick-token": config.token,
+			"x-tippa-token": config.token,
 			[header]: value,
 		});
 
@@ -851,7 +851,7 @@ test("a same-origin browser post passes on sec-fetch-site alone", async () => {
 	const res = await postPick(origin, pick(), {
 		origin: "http://ignored.example",
 		"sec-fetch-site": "same-origin",
-		"x-ui-pick-token": config.token,
+		"x-tippa-token": config.token,
 	});
 
 	// past the origin gate: the idle agent isn't connected
@@ -893,7 +893,7 @@ test("a helper that fails the pick answers 502 send_failed and logs why", async 
 		const { config } = await loadClient(origin);
 
 		const res = await postPick(origin, pick(), {
-			"x-ui-pick-token": config.token,
+			"x-tippa-token": config.token,
 		});
 
 		expect(res.status).toBe(502);
@@ -923,7 +923,7 @@ test("a send refused as not connected answers 503, not 502", async () => {
 	const { config } = await loadClient(origin);
 
 	const res = await postPick(origin, pick(), {
-		"x-ui-pick-token": config.token,
+		"x-tippa-token": config.token,
 	});
 
 	expect(res.status).toBe(503);
@@ -932,13 +932,13 @@ test("a send refused as not connected answers 503, not 502", async () => {
 
 test("one plugin instance shared by two dev servers keeps each server's connection", async () => {
 	helper = await startHelper();
-	const plugin = uiPick({ agent: claudeSession() });
+	const plugin = tippa({ agent: claudeSession() });
 	const firstLogged: string[] = [];
 	const first = await startServer(plugin, {
 		customLogger: {
 			...logger,
 			info: (message) => {
-				if (message.startsWith("ui-pick")) firstLogged.push(message);
+				if (message.startsWith("tippa")) firstLogged.push(message);
 			},
 		},
 	});
@@ -954,7 +954,7 @@ test("one plugin instance shared by two dev servers keeps each server's connecti
 	await first.close();
 	const { config } = await loadClient(originOf(server));
 	const res = await postPick(originOf(server), pick(), {
-		"x-ui-pick-token": config.token,
+		"x-tippa-token": config.token,
 	});
 	expect(res.status).toBe(202);
 
@@ -974,10 +974,10 @@ test("a browser that aborts mid-upload is dropped without an error", async () =>
 		host: "127.0.0.1",
 		port,
 		method: "POST",
-		path: "/__ui-pick/pick",
+		path: "/__tippa/pick",
 		headers: {
 			origin,
-			"x-ui-pick-token": config.token,
+			"x-tippa-token": config.token,
 			"content-type": "application/json",
 			"content-length": String(5 * 1024 * 1024),
 		},
@@ -992,8 +992,8 @@ test("a browser that aborts mid-upload is dropped without an error", async () =>
 });
 
 test("experimental bundled dev warns that the client won't load", async () => {
-	server = await startServer(uiPick({ agent: idleAgent }), {
+	server = await startServer(tippa({ agent: idleAgent }), {
 		experimental: { bundledDev: true },
 	});
-	expect(problems).toEqual([expect.stringMatching(/ui-pick.*bundledDev/)]);
+	expect(problems).toEqual([expect.stringMatching(/tippa.*bundledDev/)]);
 });

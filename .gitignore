@@ -1,5 +1,5 @@
 node_modules
 dist
-.ui-pick/
+.tippa/
 *.tsbuildinfo
 .claude/agent-memory-local/

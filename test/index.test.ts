@@ -4,6 +4,6 @@ test("public entry exposes the plugin, the claude session adapter and its error"
 	expect(Object.keys(await import("../src/index.ts")).sort()).toEqual([
 		"AgentNotConnectedError",
 		"claudeSession",
-		"uiPick",
+		"tippa",
 	]);
 });

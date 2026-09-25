@@ -23,8 +23,8 @@ const SEND_TIMEOUT_MS = 10_000;
 const healthSchema = z.object({ ok: z.literal(true) });
 
 /**
- * sends picks to the claude code session running the `ui-pick-channel` helper.
- * finds the helper through the nearest `.ui-pick/channel.json` at or above vite's root.
+ * sends picks to the claude code session running the `tippa-channel` helper.
+ * finds the helper through the nearest `.tippa/channel.json` at or above vite's root.
  */
 export function claudeSession(): AgentAdapter {
 	return {
@@ -79,7 +79,7 @@ function connectToHelper(root: string, logger: Logger): AgentConnection {
 			return;
 		}
 		if (result instanceof NoHelper) {
-			if (result.reason) logger.warnOnce(`ui-pick: ${result.reason}`);
+			if (result.reason) logger.warnOnce(`tippa: ${result.reason}`);
 			return wait();
 		}
 		helper = result.discovery;
@@ -221,7 +221,7 @@ function helperUrl({ port }: Discovery, path: string): string {
 }
 
 function auth({ secret }: Discovery): Record<string, string> {
-	return { "x-ui-pick-secret": secret };
+	return { "x-tippa-secret": secret };
 }
 
 /** reads the helper's `data: <json>` events until the stream ends or is aborted */
