@@ -5,7 +5,7 @@ import type {
 	Plugin,
 	ReactGrabAPI,
 } from "react-grab/core";
-import { afterEach, expect, type Mock, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { startGrab } from "../../src/client/grab.ts";
 
 vi.mock(import("react-grab/core"), async () => ({
@@ -24,7 +24,7 @@ afterEach(() => {
 	delete window.__REACT_GRAB__;
 });
 
-function joinGrab(): ContextMenuAction {
+function joinGrab() {
 	let plugin: Plugin | undefined;
 	window.__REACT_GRAB__ = {
 		registerPlugin: (registered: Plugin) => {
@@ -39,11 +39,11 @@ function joinGrab(): ContextMenuAction {
 		}),
 		getDisplayName: () => null,
 	} as Partial<ReactGrabAPI> as ReactGrabAPI;
-	const onPick = vi.fn();
-	startGrab(undefined, onPick);
+	const target = { pick: vi.fn(), grabbing: vi.fn() };
+	startGrab(undefined, target);
 	const action = plugin?.actions?.[0];
-	if (!action) throw new Error("no action registered");
-	return Object.assign(action, { onPick });
+	if (!plugin || !action) throw new Error("no action registered");
+	return { plugin, action, target };
 }
 
 function context(elements: Element[]): ContextMenuActionContext {
@@ -55,7 +55,7 @@ function context(elements: Element[]): ContextMenuActionContext {
 }
 
 test("the action is offered for one element, not a multi-element selection", () => {
-	const action = joinGrab();
+	const { action } = joinGrab();
 	const enabled = action.enabled as (context: ActionContext) => boolean;
 	const [a, b] = [document.createElement("div"), document.createElement("div")];
 
@@ -64,7 +64,7 @@ test("the action is offered for one element, not a multi-element selection", () 
 });
 
 test("a pick carries the module its jsx came from", async () => {
-	const action = joinGrab() as ContextMenuAction & { onPick: Mock };
+	const { action, target } = joinGrab();
 	const element = document.createElement("div");
 	const error = new Error("react-stack-top-frame");
 	error.stack = STACK;
@@ -72,7 +72,7 @@ test("a pick carries the module its jsx came from", async () => {
 
 	await action.onAction(context([element]));
 
-	expect(action.onPick).toHaveBeenCalledWith(
+	expect(target.pick).toHaveBeenCalledWith(
 		element,
 		expect.objectContaining({
 			file: "price-card.tsx",
@@ -80,4 +80,13 @@ test("a pick carries the module its jsx came from", async () => {
 			moduleUrl: "http://localhost:5173/src/components/price-card.tsx?t=1",
 		}),
 	);
+});
+
+test("the overlay hears when react-grab starts and stops picking", async () => {
+	const { plugin, target } = joinGrab();
+
+	await plugin.hooks?.onActivate?.();
+	expect(target.grabbing).toHaveBeenLastCalledWith(true);
+	await plugin.hooks?.onDeactivate?.();
+	expect(target.grabbing).toHaveBeenLastCalledWith(false);
 });

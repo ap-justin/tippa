@@ -1,6 +1,9 @@
 // the app's inherited type and colors stop at the layer: everything is set here
 export const css = `
 .layer {
+	/* all: initial leaves direction and custom properties as inherited */
+	all: initial;
+	direction: ltr;
 	position: fixed;
 	inset: 0;
 	width: auto;
@@ -52,7 +55,6 @@ label { font-weight: 600; }
 .target, .notice { margin: 0; overflow-wrap: anywhere; }
 .target { color: var(--ui-pick-muted); font-size: 12px; }
 .notice { color: var(--ui-pick-error); }
-.notice:empty { display: none; }
 textarea {
 	box-sizing: border-box;
 	width: 100%;
@@ -90,7 +92,11 @@ textarea:focus-visible, button:focus-visible {
 	font-size: 12px;
 }
 .badge[data-badge="question"] { border-color: var(--ui-pick-focus); color: var(--ui-pick-focus); }
+.badge[data-badge="failed"] { border-color: var(--ui-pick-error); color: var(--ui-pick-error); }
 .dismiss { padding: 0 6px; line-height: 1.2; }
+/* while react-grab picks, the page under a marker stays pickable */
+.layer[data-grabbing] .pick { pointer-events: none; }
+.layer[data-grabbing] .dismiss { pointer-events: auto; }
 .bubble { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
 .bubble:empty { display: none; }
 `;

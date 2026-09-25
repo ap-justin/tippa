@@ -14,8 +14,12 @@ vi.mock(import("modern-screenshot"), async (importOriginal) => ({
 	domToPng,
 }));
 
-// happy-dom has no popover api; the top layer isn't what these tests cover
-HTMLElement.prototype.showPopover ??= () => {};
+// happy-dom has no popover api: record what the overlay asks of the top layer
+const popoverCalls: boolean[] = [];
+HTMLElement.prototype.togglePopover = (force?: boolean) => {
+	popoverCalls.push(force ?? true);
+	return force ?? true;
+};
 
 const PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgo=";
 
@@ -29,8 +33,11 @@ const selection: Selection = {
 };
 
 afterEach(() => {
-	for (const node of document.querySelectorAll("ui-pick-overlay, .picked"))
+	for (const node of document.querySelectorAll(
+		"ui-pick-overlay, .picked, .page, .modal",
+	))
 		node.remove();
+	popoverCalls.length = 0;
 	vi.useRealTimers();
 });
 
@@ -53,9 +60,10 @@ function mount(post = respond(202)) {
 		{ token: "t0ken", endpoint: "/__ui-pick/pick" },
 		post,
 	);
-	const onPick = mountOverlay(controller);
-	const root = document.querySelector("ui-pick-overlay")?.shadowRoot;
-	if (!root) throw new Error("overlay not mounted");
+	const overlay = mountOverlay(controller);
+	const host = document.querySelector("ui-pick-overlay");
+	const root = host?.shadowRoot;
+	if (!host || !root) throw new Error("overlay not mounted");
 	const query = <T extends Element>(selector: string): T => {
 		const found = root.querySelector<T>(selector);
 		if (!found) throw new Error(`no ${selector}`);
@@ -67,11 +75,14 @@ function mount(post = respond(202)) {
 	const cancel = query<HTMLButtonElement>('button[type="button"]');
 	const notice = query<HTMLElement>(".notice");
 
-	function pick(picked: Selection | undefined = selection): Element {
+	function pick(
+		picked: Selection | undefined = selection,
+		parent: Element = document.body,
+	): Element {
 		const element = document.createElement("div");
 		element.className = "picked";
-		document.body.append(element);
-		onPick(element, picked);
+		parent.append(element);
+		overlay.pick(element, picked);
 		return element;
 	}
 
@@ -86,11 +97,25 @@ function mount(post = respond(202)) {
 		);
 	}
 
+	/** picks, types and sends; resolves with the sent pick's id once the box closes */
+	async function sendPick(text = "make the price bold", picked = selection) {
+		const element = pick(picked);
+		type(text);
+		send.click();
+		await vi.waitFor(() => expect(composer.hidden).toBe(true));
+		const pickId = posted().at(-1)?.pickId;
+		if (!pickId) throw new Error("nothing posted");
+		return { pickId, element };
+	}
+
 	function posted(): PickRequest[] {
 		return post.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
 	}
 
 	return {
+		overlay,
+		host,
+		root,
 		controller,
 		post,
 		composer,
@@ -101,7 +126,9 @@ function mount(post = respond(202)) {
 		pick,
 		type,
 		key,
+		sendPick,
 		posted,
+		markers: () => [...root.querySelectorAll<HTMLElement>(".pick")],
 	};
 }
 
@@ -303,4 +330,376 @@ test("the posted pick passes the dev server's schema, screenshot and module url 
 		moduleUrl: selection.moduleUrl,
 		screenshot: "iVBORw0KGgo=",
 	});
+});
+
+test("a pick after the app's root re-render removed the overlay puts it back in the top layer", () => {
+	const ui = mount();
+	ui.host.remove();
+	popoverCalls.length = 0;
+
+	ui.pick();
+
+	expect(ui.host.isConnected).toBe(true);
+	expect(popoverCalls.at(-1)).toBe(true);
+	expect(ui.composer.hidden).toBe(false);
+});
+
+test("each pick re-raises the overlay to the top of the top layer", () => {
+	const ui = mount();
+	popoverCalls.length = 0;
+
+	ui.pick();
+
+	expect(popoverCalls).toEqual([false, true]);
+});
+
+test("a reply after the overlay was removed puts it back with its marker", async () => {
+	const ui = mount();
+	ui.pick();
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.composer.hidden).toBe(true));
+	const [{ pickId } = { pickId: "" }] = ui.posted();
+	ui.host.remove();
+
+	ui.controller.handleReply({
+		pickId,
+		status: "done",
+		message: "made it bold",
+	});
+
+	expect(ui.host.isConnected).toBe(true);
+	expect(popoverCalls.at(-1)).toBe(true);
+	expect(ui.root.querySelector(".bubble")?.textContent).toBe("made it bold");
+});
+
+test("a dismissed marker stays gone until claude replies to its pick again", async () => {
+	const ui = mount();
+	const { pickId } = await ui.sendPick();
+	ui.controller.handleReply({ pickId, status: "working", message: "" });
+	ui.markers()[0]?.querySelector<HTMLButtonElement>(".dismiss")?.click();
+	expect(ui.markers()).toHaveLength(0);
+
+	ui.controller.handleStatus({ status: "connected" });
+	expect(ui.markers()).toHaveLength(0);
+
+	ui.controller.handleReply({
+		pickId,
+		status: "question",
+		message: "which price?",
+	});
+	expect(ui.markers()).toHaveLength(1);
+	expect(ui.markers()[0]?.querySelector(".bubble")?.textContent).toBe(
+		"which price?",
+	);
+});
+
+function focusedPageButton(): HTMLButtonElement {
+	const button = document.createElement("button");
+	button.className = "page";
+	document.body.append(button);
+	button.focus();
+	return button;
+}
+
+test.each([
+	["Escape", (ui: ReturnType<typeof mount>) => ui.key({ key: "Escape" })],
+	["Cancel", (ui: ReturnType<typeof mount>) => ui.cancel.click()],
+	[
+		"a successful send",
+		async (ui: ReturnType<typeof mount>) => {
+			ui.send.click();
+			await vi.waitFor(() => expect(ui.composer.hidden).toBe(true));
+		},
+	],
+])("%s gives focus back to where it was before the pick", async (_, close) => {
+	const ui = mount();
+	const before = focusedPageButton();
+	ui.pick();
+	expect(ui.root.activeElement).toBe(ui.note);
+
+	await close(ui);
+
+	expect(document.activeElement).toBe(before);
+});
+
+test("pressing Send keeps keyboard focus in the box while it sends", async () => {
+	const { promise: response, resolve } = deferred<Response>();
+	const ui = mount(vi.fn<typeof fetch>(() => response));
+	ui.pick();
+	ui.send.focus();
+
+	ui.send.click();
+
+	expect(ui.send.disabled).toBe(true);
+	expect(ui.root.activeElement).toBe(ui.note);
+	resolve(Response.json({}, { status: 202 }));
+});
+
+test("the note is described by its target line and the notice, which is rendered while empty", () => {
+	const ui = mount();
+	ui.pick();
+
+	const described = ui.note
+		.getAttribute("aria-describedby")
+		?.split(" ")
+		.map((id) => ui.root.getElementById(id));
+	expect(described).toEqual([ui.root.querySelector(".target"), ui.notice]);
+	expect(ui.notice.textContent).toBe("");
+	expect(ui.notice.getAttribute("role")).toBe("status");
+	expect(getComputedStyle(ui.notice).display).not.toBe("none");
+});
+
+test("a reply rewrites only its own marker, so other markers aren't announced again", async () => {
+	const ui = mount();
+	const a = await ui.sendPick("bold");
+	const b = await ui.sendPick("red", { ...selection, component: "Header" });
+	ui.controller.handleReply({
+		pickId: a.pickId,
+		status: "done",
+		message: "made it bold",
+	});
+	const [markerA] = ui.markers();
+	if (!markerA) throw new Error("no marker");
+	const changes = new MutationObserver(() => {});
+	changes.observe(markerA, {
+		subtree: true,
+		childList: true,
+		characterData: true,
+		attributes: true,
+	});
+
+	ui.controller.handleReply({
+		pickId: b.pickId,
+		status: "working",
+		message: "",
+	});
+	ui.controller.handleStatus({ status: "connected" });
+
+	expect(changes.takeRecords()).toEqual([]);
+});
+
+test("each dismiss button is named for its pick", async () => {
+	const ui = mount();
+	await ui.sendPick();
+
+	const dismiss = ui.markers()[0]?.querySelector("button");
+	expect(dismiss?.getAttribute("aria-label")).toBe(
+		"Dismiss reply for PriceCard",
+	);
+});
+
+test.each(["keydown", "keyup", "keypress"])(
+	"%s while typing a note doesn't reach the page's shortcut listeners",
+	(type) => {
+		const ui = mount();
+		const pageShortcut = vi.fn();
+		document.addEventListener(type, pageShortcut);
+		ui.pick();
+
+		ui.note.dispatchEvent(
+			new KeyboardEvent(type, { key: "k", bubbles: true, composed: true }),
+		);
+
+		document.removeEventListener(type, pageShortcut);
+		expect(pageShortcut).not.toHaveBeenCalled();
+	},
+);
+
+test("a send that fails while another note is being typed keeps that note and shows the failure on its marker", async () => {
+	const { promise: response, resolve } = deferred<Response>();
+	const ui = mount(vi.fn<typeof fetch>(() => response));
+	ui.pick();
+	ui.type("make the price bold");
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	ui.pick({ ...selection, component: "Header" });
+	ui.type("make it red");
+
+	resolve(Response.json({ error: "invalid_pick" }, { status: 400 }));
+
+	await vi.waitFor(() =>
+		expect(ui.root.querySelector(".badge")?.textContent).toBe("not sent"),
+	);
+	expect(ui.note.value).toBe("make it red");
+	expect(ui.root.querySelector(".target")?.textContent).toMatch(/^Header/);
+	expect(ui.markers()).toHaveLength(1);
+	const [marker] = ui.markers();
+	expect(marker?.querySelector(".bubble")?.textContent).toBe(
+		"Couldn't send (400 invalid_pick)\nmake the price bold",
+	);
+	expect(marker?.querySelector("button")?.getAttribute("aria-label")).toBe(
+		"Dismiss reply for PriceCard",
+	);
+});
+
+/** real frames; happy-dom runs rAF callbacks off its timers */
+function frames(count: number): Promise<void> {
+	return new Promise((done) => setTimeout(done, 20 * count));
+}
+
+test.each([
+	[
+		"done",
+		(ui: ReturnType<typeof mount>, pickId: string) =>
+			ui.controller.handleReply({ pickId, status: "done", message: "" }),
+	],
+	[
+		"gone from the page",
+		(_: ReturnType<typeof mount>, __: string, element: Element) =>
+			element.remove(),
+	],
+])("a marker whose pick is %s stops following it", async (_, settle) => {
+	const ui = mount();
+	const { pickId, element } = await ui.sendPick();
+	settle(ui, pickId, element);
+	await frames(2);
+	const nextFrame = vi.spyOn(window, "requestAnimationFrame");
+
+	await frames(3);
+
+	expect(nextFrame).not.toHaveBeenCalled();
+	nextFrame.mockRestore();
+});
+
+test("a marker still working keeps following its element", async () => {
+	const ui = mount();
+	await ui.sendPick();
+	const nextFrame = vi.spyOn(window, "requestAnimationFrame");
+
+	await frames(3);
+
+	expect(nextFrame).toHaveBeenCalled();
+	nextFrame.mockRestore();
+});
+
+test("each frame measures every marker before moving any", async () => {
+	const ui = mount();
+	const a = await ui.sendPick("bold");
+	const b = await ui.sendPick("red", { ...selection, component: "Header" });
+	// where the markers stood at each measurement
+	const spotsAtEachRead: string[] = [];
+	for (const element of [a.element, b.element])
+		vi.spyOn(element, "getBoundingClientRect").mockImplementation(() => {
+			spotsAtEachRead.push(
+				ui
+					.markers()
+					.map((marker) => marker.style.transform)
+					.join(" "),
+			);
+			// a new spot every read, so every frame moves both markers
+			return new DOMRect(0, spotsAtEachRead.length * 10, 10, 10);
+		});
+
+	await frames(3);
+
+	const [first, second, third] = spotsAtEachRead;
+	expect(second).toBe(first);
+	expect(third).not.toBe(second);
+});
+
+/** the content element radix's Dialog renders (no aria-modal), or an aria-modal one */
+function openModal(attributes: Record<string, string>): HTMLElement {
+	const modal = document.createElement("div");
+	modal.className = "modal";
+	for (const [name, value] of Object.entries(attributes))
+		modal.setAttribute(name, value);
+	document.body.append(modal);
+	return modal;
+}
+
+const MODALS = [
+	["radix Dialog", { role: "dialog", "data-state": "open" }],
+	["aria-modal dialog", { role: "dialog", "aria-modal": "true" }],
+] as const;
+
+test.each(MODALS)(
+	"picking inside an open %s puts the box inside it, so its focus trap and outside-click keep out of the way",
+	(_, attributes) => {
+		const ui = mount();
+		const modal = openModal(attributes);
+		popoverCalls.length = 0;
+
+		ui.pick(selection, modal);
+
+		expect(ui.host.parentElement).toBe(modal);
+		expect(popoverCalls).toEqual([false, true]);
+		expect(ui.root.activeElement).toBe(ui.note);
+	},
+);
+
+test("closing the box moves the overlay back out of the dialog", () => {
+	const ui = mount();
+	const modal = openModal({ role: "dialog", "data-state": "open" });
+	ui.pick(selection, modal);
+
+	ui.key({ key: "Escape" });
+
+	expect(ui.host.parentElement).toBe(document.documentElement);
+	expect(popoverCalls.at(-1)).toBe(true);
+});
+
+test.each([
+	[
+		"closes",
+		(modal: HTMLElement) => modal.setAttribute("data-state", "closed"),
+	],
+	["unmounts, overlay and all", (modal: HTMLElement) => modal.remove()],
+])(
+	"the dialog that %s under an open box gives the overlay back to the page",
+	async (_, dismiss) => {
+		const ui = mount();
+		const modal = openModal({ role: "dialog", "data-state": "open" });
+		ui.pick(selection, modal);
+
+		dismiss(modal);
+		await frames(2);
+
+		expect(ui.host.parentElement).toBe(document.documentElement);
+		expect(ui.composer.hidden).toBe(false);
+	},
+);
+
+test("a pick outside any dialog leaves the overlay on the page", () => {
+	const ui = mount();
+	openModal({ role: "dialog", "data-state": "open" });
+
+	ui.pick();
+
+	expect(ui.host.parentElement).toBe(document.documentElement);
+});
+
+test("while react-grab is picking, markers let the pointer through to the page except their dismiss button", async () => {
+	const ui = mount();
+	await ui.sendPick();
+	const [marker] = ui.markers();
+	const dismiss = marker?.querySelector("button");
+	if (!marker || !dismiss) throw new Error("no marker");
+
+	ui.overlay.grabbing(true);
+	expect(getComputedStyle(marker).pointerEvents).toBe("none");
+	expect(getComputedStyle(dismiss).pointerEvents).toBe("auto");
+
+	ui.overlay.grabbing(false);
+	expect(getComputedStyle(marker).pointerEvents).toBe("auto");
+});
+
+test("a settled marker whose text changes is placed again for its new size", async () => {
+	const ui = mount();
+	const { pickId, element } = await ui.sendPick();
+	ui.controller.handleReply({
+		pickId,
+		status: "done",
+		message: "made it bold",
+	});
+	await frames(2);
+	const measure = vi.spyOn(element, "getBoundingClientRect");
+
+	ui.controller.handleReply({
+		pickId,
+		status: "question",
+		message: "which price?",
+	});
+	await frames(2);
+
+	expect(measure).toHaveBeenCalled();
 });

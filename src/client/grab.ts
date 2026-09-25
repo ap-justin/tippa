@@ -10,11 +10,13 @@ declare global {
 	}
 }
 
-/** `selection` is undefined when react-grab found no source file and line */
-export type OnPick = (
-	element: Element,
-	selection: Selection | undefined,
-) => void;
+/** what react-grab tells the overlay */
+export interface PickTarget {
+	/** `selection` is undefined when react-grab found no source file and line */
+	pick(element: Element, selection: Selection | undefined): void;
+	/** react-grab started or stopped picking */
+	grabbing(active: boolean): void;
+}
 
 /**
  * adds "Send to Claude" to react-grab's menu. joins the page's react-grab when it
@@ -22,12 +24,16 @@ export type OnPick = (
  * entry does, so an app that imports react-grab later reuses it instead of
  * drawing a second picker.
  */
-export function startGrab(key: string | undefined, onPick: OnPick): void {
+export function startGrab(key: string | undefined, target: PickTarget): void {
 	const grab = window.__REACT_GRAB__ ?? publish(init({ telemetry: false }));
 	// the plugin's `key` option was set on purpose, so it wins over the app's own react-grab config
 	if (key) grab.setOptions({ activationKey: key });
 	grab.registerPlugin({
 		name: "ui-pick",
+		hooks: {
+			onActivate: () => target.grabbing(true),
+			onDeactivate: () => target.grabbing(false),
+		},
 		actions: [
 			{
 				id: "ui-pick-send",
@@ -42,7 +48,7 @@ export function startGrab(key: string | undefined, onPick: OnPick): void {
 						grab.getSource(element),
 						formatElementInfo(element),
 					]);
-					onPick(
+					target.pick(
 						element,
 						toSelection({
 							source,
