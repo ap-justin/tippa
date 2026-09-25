@@ -1,0 +1,37 @@
+{
+	"name": "ui-pick",
+	"version": "0.0.0",
+	"private": true,
+	"description": "pick an element in a vite react app and send the change request to a running claude code session",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"default": "./dist/index.mjs"
+		}
+	},
+	"bin": {
+		"ui-pick-channel": "./dist/channel/bin.mjs"
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"node": ">=22.12"
+	},
+	"packageManager": "pnpm@12.4.2",
+	"scripts": {
+		"build": "tsdown",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check .",
+		"test": "vitest run",
+		"check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.14",
+		"@types/node": "^24.13.6",
+		"tsdown": "^0.23.0",
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.1"
+	}
+}
