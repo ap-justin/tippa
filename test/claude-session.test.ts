@@ -18,7 +18,7 @@ import {
 	AgentNotConnectedError,
 	claudeSession,
 } from "../src/index.ts";
-import type { AgentStatus, PickReply } from "../src/protocol.ts";
+import type { AgentStatus } from "../src/protocol.ts";
 
 const SECRET = "s".repeat(64);
 
@@ -28,7 +28,6 @@ let connection: AgentConnection | undefined;
 let requests: string[];
 let warnings: string[];
 let statuses: AgentStatus[];
-let replies: PickReply[];
 
 const logger = {
 	info() {},
@@ -75,7 +74,6 @@ function helperLike(events: (res: ServerResponse) => void) {
 function connect(): AgentConnection {
 	connection = claudeSession().connect({ root, logger });
 	connection.onStatus((status) => statuses.push(status));
-	connection.onReply((reply) => replies.push(reply));
 	return connection;
 }
 
@@ -84,7 +82,6 @@ beforeEach(async () => {
 	requests = [];
 	warnings = [];
 	statuses = [];
-	replies = [];
 });
 
 afterEach(async () => {
@@ -153,28 +150,6 @@ test("a corrupt discovery file warns once and stays waiting", async () => {
 
 	await vi.waitFor(() => expect(statuses).toEqual(["waiting"]));
 	expect(warnings).toEqual([expect.stringMatching(/channel\.json/)]);
-});
-
-test("replies split across chunks, or several in one chunk, arrive whole and in order", async () => {
-	let stream: ServerResponse | undefined;
-	await serveFake(helperLike((res) => (stream = res)));
-	connect();
-	await vi.waitFor(() => expect(statuses).toEqual(["connected"]));
-
-	stream?.write('data: {"pickId":"p_1","status":"wor');
-	await new Promise((resolve) => setTimeout(resolve, 50));
-	stream?.write('king","message":"on it"}\n\n: ping\n\n');
-	stream?.write(
-		'data: {"pickId":"p_1","status":"done","message":"a"}\n\ndata: {"pickId":"p_2","status":"question","message":"b?"}\n\n',
-	);
-
-	await vi.waitFor(() =>
-		expect(replies).toEqual([
-			{ pickId: "p_1", status: "working", message: "on it" },
-			{ pickId: "p_1", status: "done", message: "a" },
-			{ pickId: "p_2", status: "question", message: "b?" },
-		]),
-	);
 });
 
 test("when the stream ends the status is waiting at once and send refuses as not connected", async () => {

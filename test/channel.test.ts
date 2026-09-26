@@ -109,12 +109,11 @@ afterEach(async () => {
 	await rm(cwd, { recursive: true, force: true });
 });
 
-test("declares the claude/channel capability and a reply tool", async () => {
-	expect(client.getServerCapabilities()?.experimental).toEqual({
-		"claude/channel": {},
+test("declares the claude/channel capability and no tools", async () => {
+	expect(client.getServerCapabilities()).toEqual({
+		experimental: { "claude/channel": {} },
 	});
-	const { tools } = await client.listTools();
-	expect(tools.map((t) => t.name)).toEqual(["reply"]);
+	await expect(client.listTools()).rejects.toThrow(/method not found/i);
 });
 
 test("an authed one-element pick emits one channel notification with the pick", async () => {
@@ -345,6 +344,12 @@ test("instructions tie the note's [n] markers to the element blocks and their sc
 	expect(instructions).toMatch(/read each screenshot path/i);
 });
 
+test("instructions ask for an answer in the conversation, with no reply channel", () => {
+	const instructions = client.getInstructions();
+	expect(instructions).toMatch(/answer in the conversation/i);
+	expect(instructions).not.toMatch(/reply|pick_id|working|done|question/i);
+});
+
 test("the server reports the package's version", async () => {
 	const { version } = JSON.parse(
 		await readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -482,6 +487,7 @@ test("an open events stream gets a keepalive comment every 30 s", async () => {
 	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 	try {
 		const res = await get("/events");
+		expect(res.headers.get("content-type")).toBe("text/event-stream");
 		const reader = res.body?.pipeThrough(new TextDecoderStream()).getReader();
 		vi.advanceTimersByTime(30_000);
 		let received = "";
@@ -509,93 +515,6 @@ test("health answers ok to an authed caller", async () => {
 	expect(res.status).toBe(200);
 	expect(await res.json()).toEqual({ ok: true });
 });
-
-/** a pick claude has seen, so a reply can name it */
-async function emitPick(pickId: string): Promise<void> {
-	await post("/pick", pick({ pickId }));
-	await vi.waitFor(() =>
-		expect(notifications).toContainEqual(
-			expect.objectContaining({
-				params: expect.objectContaining({
-					meta: expect.objectContaining({ pick_id: pickId }),
-				}),
-			}),
-		),
-	);
-}
-
-test("a reply tool call reaches an open events stream", async () => {
-	await emitPick("p_1");
-	const res = await get("/events");
-	expect(res.status).toBe(200);
-	expect(res.headers.get("content-type")).toBe("text/event-stream");
-	const reader = res.body?.pipeThrough(new TextDecoderStream()).getReader();
-
-	const result = await client.callTool({
-		name: "reply",
-		arguments: { pick_id: "p_1", status: "done", message: "made it red" },
-	});
-	expect(result.isError).toBeFalsy();
-
-	let received = "";
-	while (!received.includes("\n\n", received.indexOf("data:"))) {
-		const chunk = await reader?.read();
-		if (!chunk || chunk.done) break;
-		received += chunk.value;
-	}
-	await reader?.cancel();
-	const data = received
-		.split("\n")
-		.find((line) => line.startsWith("data: "))
-		?.slice("data: ".length);
-	expect(JSON.parse(data ?? "null")).toEqual({
-		pickId: "p_1",
-		status: "done",
-		message: "made it red",
-	});
-});
-
-test("a reply with no browser listening is not an error", async () => {
-	await emitPick("p_1");
-	const result = await client.callTool({
-		name: "reply",
-		arguments: { pick_id: "p_1", status: "working", message: "on it" },
-	});
-	expect(result.isError).toBeFalsy();
-});
-
-test.each([
-	["an id this session never emitted", "p_never", /unknown pick_id/],
-	["a malformed id", "../x", /Input validation error.*pick_id/s],
-])(
-	"a reply to %s is a tool error and reaches no browser",
-	async (_, pickId, text) => {
-		await emitPick("p_1");
-		const res = await get("/events");
-		const reader = res.body?.pipeThrough(new TextDecoderStream()).getReader();
-
-		const result = await client.callTool({
-			name: "reply",
-			arguments: { pick_id: pickId, status: "done", message: "made it red" },
-		});
-
-		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toMatch(text);
-		await client.callTool({
-			name: "reply",
-			arguments: { pick_id: "p_1", status: "done", message: "real" },
-		});
-		let received = "";
-		while (!received.includes("data:")) {
-			const chunk = await reader?.read();
-			if (!chunk || chunk.done) break;
-			received += chunk.value;
-		}
-		await reader?.cancel();
-		expect(received).toContain('"message":"real"');
-		expect(received).not.toContain("made it red");
-	},
-);
 
 const discoveryFile = () => discoveryPath(cwd);
 

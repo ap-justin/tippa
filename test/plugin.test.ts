@@ -107,7 +107,6 @@ const idleAgent: AgentAdapter = {
 	connect: () => ({
 		status: "waiting",
 		onStatus() {},
-		onReply() {},
 		send: async () => {},
 		close: async () => {},
 	}),
@@ -400,7 +399,6 @@ function recordingAgent(sent: PickRequest[]): AgentAdapter {
 		connect: () => ({
 			status: "connected",
 			onStatus() {},
-			onReply() {},
 			send: async (pick) => {
 				sent.push(pick);
 			},
@@ -766,31 +764,6 @@ async function openHmrSocket(origin: string) {
 	};
 }
 
-test("claude's reply reaches the browser as a tippa:reply hmr event", async () => {
-	helper = await startHelper();
-	const origin = await serve(claudeSession());
-	await vi.waitFor(() => expect(logged).toEqual([CONNECTED]), {
-		timeout: 3000,
-	});
-	const socket = await openHmrSocket(origin);
-	const { config } = await loadClient(origin);
-	await postPick(origin, pick(), { "x-tippa-token": config.token });
-	await vi.waitFor(() => expect(helper?.notifications).toHaveLength(1));
-
-	await helper.client.callTool({
-		name: "reply",
-		arguments: { pick_id: "p_1", status: "done", message: "made it red" },
-	});
-
-	await vi.waitFor(() =>
-		expect(socket.received).toContainEqual({
-			event: "tippa:reply",
-			data: { pickId: "p_1", status: "done", message: "made it red" },
-		}),
-	);
-	socket.close();
-});
-
 test("a browser that connects late learns the current status by asking", async () => {
 	helper = await startHelper();
 	const origin = await serve(claudeSession());
@@ -935,16 +908,21 @@ test("a same-origin browser post passes on sec-fetch-site alone", async () => {
 	expect(res.status).toBe(503);
 });
 
-/** a fake helper at the project root: healthy, streaming, with `/pick` answered by `onPick` */
+/**
+ * a fake helper at the project root: healthy, streaming, with `/pick` answered by `onPick`
+ * and each opened events stream handed to `onEvents`
+ */
 async function serveFakeHelper(
 	onPick: (res: ServerResponse) => void,
+	onEvents: (res: ServerResponse) => void = () => {},
 ): Promise<() => Promise<void>> {
 	const secret = "s".repeat(64);
 	const fake = createHttpServer((req, res) => {
 		if (req.url === "/health") return res.end('{"ok":true}');
 		if (req.url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			return res.flushHeaders();
+			res.flushHeaders();
+			return onEvents(res);
 		}
 		req.resume();
 		onPick(res);
@@ -983,13 +961,46 @@ test("a helper that fails the pick answers 502 send_failed and logs why", async 
 	}
 });
 
+test("data on the helper's events stream never reaches the browser", async () => {
+	let stream: ServerResponse | undefined;
+	const stopFake = await serveFakeHelper(
+		(res) => res.writeHead(404).end(),
+		(res) => {
+			stream ??= res;
+		},
+	);
+	try {
+		const origin = await serve(claudeSession());
+		await vi.waitFor(() => expect(logged).toEqual([CONNECTED]), {
+			timeout: 3000,
+		});
+		const socket = await openHmrSocket(origin);
+
+		stream?.write(
+			`data: ${JSON.stringify({ pickId: "p_1", status: "done", message: "made it red" })}\n\n`,
+		);
+		stream?.end();
+
+		await vi.waitFor(() => expect(logged).toEqual([CONNECTED, WAITING]));
+		await vi.waitFor(() =>
+			expect(socket.received).toEqual([
+				{ event: "tippa:status", data: { status: "waiting" } },
+			]),
+		);
+		socket.close();
+	} finally {
+		await server?.close();
+		server = undefined;
+		await stopFake();
+	}
+});
+
 test("a send refused as not connected answers 503, not 502", async () => {
 	const racing: AgentAdapter = {
 		label: "Racing",
 		connect: () => ({
 			status: "connected",
 			onStatus() {},
-			onReply() {},
 			send: async () => {
 				throw new AgentNotConnectedError("Racing");
 			},

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ap-justin/tippa/actions/workflows/ci.yml/badge.svg)](https://github.com/ap-justin/tippa/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/tippa)](https://www.npmjs.com/package/tippa)
 
-Pick an element in your running Vite + React app, type what should change, and the request lands in the Claude Code session already open in that project. Claude edits the file, HMR repaints the page, and Claude's reply shows next to the element. It's a dev-server-only Vite plugin plus a small channel server that Claude Code launches. Picking is done by [react-grab](https://github.com/aidenybai/react-grab).
+Pick an element in your running Vite + React app, type what should change, and the request lands in the Claude Code session already open in that project. Claude edits the file, HMR repaints the page, and Claude answers in the terminal as usual. It's a dev-server-only Vite plugin plus a small channel server that Claude Code launches. Picking is done by [react-grab](https://github.com/aidenybai/react-grab).
 
 ## Setup
 
@@ -72,7 +72,7 @@ and prints the line again when the state changes.
 
 A note can point at up to five elements. The first is `[1]`. While the box is open, pick another element with react-grab and `[2]`, `[3]`… is inserted at the cursor, and the element is tagged with its number on the page. Picking an element already in the note inserts its marker again. The list under the note shows each element: remove one there and its markers leave the note and the rest renumber.
 
-The element gets a status badge: sending, sent, working, done, or question. Claude's reply appears in a bubble beside the element. You can keep picking while Claude works: picks queue and Claude takes them in order. If Claude isn't connected, the note box says "Claude isn't connected" and nothing is sent.
+Once the note is sent, each of its elements is tagged **Sent**, which fades out over two seconds. Claude answers in the terminal, not on the page. You can keep picking while Claude works: picks queue and Claude takes them in order. If Claude isn't connected, the note box says "Claude isn't connected" and nothing is sent.
 
 ## What Claude receives
 
@@ -100,7 +100,7 @@ html:
 </channel>
 ```
 
-Each `screenshot` is a PNG of its element in `.tippa/` inside the project, so Claude can read it without an extra permission prompt. It's deleted when the session ends. Claude tells the channel "working" when it starts, then "done" or "question", and those updates drive the badge and the reply bubble.
+Each `screenshot` is a PNG of its element in `.tippa/` inside the project, so Claude can read it without an extra permission prompt. It's deleted when the session ends.
 
 ## Security
 

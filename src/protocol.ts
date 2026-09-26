@@ -1,19 +1,12 @@
 import type { z } from "zod";
 // type-only, so the browser client importing this module never loads zod
-import type {
-	pickElementSchema,
-	pickReplySchema,
-	pickRequestSchema,
-} from "./schema.ts";
+import type { pickElementSchema, pickRequestSchema } from "./schema.ts";
 
 /** see `pickRequestSchema` */
 export type PickRequest = z.output<typeof pickRequestSchema>;
 
 /** see `pickElementSchema` */
 export type PickElement = z.output<typeof pickElementSchema>;
-
-/** payload of the `tippa:reply` hmr event */
-export type PickReply = z.output<typeof pickReplySchema>;
 
 export type AgentStatus = "connected" | "waiting";
 
@@ -46,7 +39,6 @@ export const MAX_SCREENSHOT_CHARS = Math.floor(
 /** base64 of the 8-byte png signature and the ihdr length's leading zero bits */
 export const PNG_BASE64_PREFIX = "iVBORw0KGgo";
 
-export const REPLY_EVENT = "tippa:reply";
 export const STATUS_EVENT = "tippa:status";
 /** sent by the loader right after `start` returns; answered with `tippa:status` to that client only */
 export const STATUS_REQUEST_EVENT = "tippa:status-request";

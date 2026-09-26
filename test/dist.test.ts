@@ -53,7 +53,6 @@ const idleAgent: AgentAdapter = {
 	connect: () => ({
 		status: "waiting",
 		onStatus() {},
-		onReply() {},
 		send: async () => {},
 		close: async () => {},
 	}),

@@ -10,8 +10,8 @@ export const MAX_HTML_CHARS = 4000;
 
 const MAX_MODULE_URL_CHARS = 2048;
 
-// a `<channel>` tag attribute and the key claude's replies are routed by
-export const pickIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+// a `<channel>` tag attribute
+const pickIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 
 /** base64 png; checked by prefix, so it holds in the browser as well as node */
 export const pngBase64Schema = z
@@ -47,11 +47,4 @@ export const pickRequestSchema = z.object({
 	/** refers to `elements[i]` by the literal marker `[i + 1]` */
 	note: z.string(),
 	elements: z.array(pickElementSchema).min(1).max(MAX_PICK_ELEMENTS),
-});
-
-/** what an agent reports back about a pick, sent to the page as the `tippa:reply` hmr event */
-export const pickReplySchema = z.object({
-	pickId: z.string(),
-	status: z.enum(["working", "done", "question"]),
-	message: z.string(),
 });

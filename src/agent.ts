@@ -1,5 +1,5 @@
 import type { Logger } from "vite";
-import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
+import type { AgentStatus, PickRequest } from "./protocol.ts";
 
 /** how tippa reaches a coding agent; `claudeSession()` is one */
 export interface AgentAdapter {
@@ -18,7 +18,6 @@ export interface AgentConnection {
 	readonly status: AgentStatus;
 	/** called after the first connection check, then once per change */
 	onStatus(listener: (status: AgentStatus) => void): void;
-	onReply(listener: (reply: PickReply) => void): void;
 	/** rejects with `AgentNotConnectedError` when disconnected, any other error when the agent refuses */
 	send(pick: PickRequest): Promise<void>;
 	close(): Promise<void>;

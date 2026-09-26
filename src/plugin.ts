@@ -14,7 +14,6 @@ import {
 	type ClientConfig,
 	MAX_BODY_BYTES,
 	type PickElement,
-	REPLY_EVENT,
 	STATUS_EVENT,
 	STATUS_REQUEST_EVENT,
 } from "./protocol.ts";
@@ -81,7 +80,6 @@ export function tippa(options: TippaOptions): Plugin {
 				);
 				hot.send(STATUS_EVENT, { status });
 			});
-			agentConnection.onReply((reply) => hot.send(REPLY_EVENT, reply));
 			hot.on(STATUS_REQUEST_EVENT, (_, client) =>
 				client.send(STATUS_EVENT, { status: agentConnection.status }),
 			);

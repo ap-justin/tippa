@@ -13,8 +13,7 @@ import {
 	discoverySchema,
 	isAlive,
 } from "./channel/discovery.ts";
-import type { AgentStatus, PickReply, PickRequest } from "./protocol.ts";
-import { pickReplySchema } from "./schema.ts";
+import type { AgentStatus, PickRequest } from "./protocol.ts";
 
 const LABEL = "Claude";
 const POLL_MS = 2000;
@@ -40,7 +39,6 @@ class NoHelper {
 
 function connectToHelper(root: string, logger: Logger): AgentConnection {
 	const statusListeners = new Set<(status: AgentStatus) => void>();
-	const replyListeners = new Set<(reply: PickReply) => void>();
 	let status: AgentStatus = "waiting";
 	let announced = false;
 	let helper: Discovery | undefined;
@@ -84,13 +82,9 @@ function connectToHelper(root: string, logger: Logger): AgentConnection {
 		}
 		helper = result.discovery;
 		setStatus("connected");
-		void readReplies(result.stream, emitReply).then(() => {
+		void drain(result.stream).then(() => {
 			if (!closed) wait();
 		});
-	}
-
-	function emitReply(reply: PickReply): void {
-		for (const listener of replyListeners) listener(reply);
 	}
 
 	void check();
@@ -101,9 +95,6 @@ function connectToHelper(root: string, logger: Logger): AgentConnection {
 		},
 		onStatus(listener) {
 			statusListeners.add(listener);
-		},
-		onReply(listener) {
-			replyListeners.add(listener);
 		},
 		async send(pick: PickRequest) {
 			const target = helper;
@@ -132,7 +123,7 @@ function connectToHelper(root: string, logger: Logger): AgentConnection {
 }
 
 /**
- * checks the port answers as the helper, then opens its reply stream.
+ * checks the port answers as the helper, then opens its events stream, which stays open while the helper runs.
  * `signal` aborts both, and stays attached to the stream for close()
  */
 async function open(
@@ -224,36 +215,11 @@ function auth({ secret }: Discovery): Record<string, string> {
 	return { "x-tippa-secret": secret };
 }
 
-/** reads the helper's `data: <json>` events until the stream ends or is aborted */
-async function readReplies(
-	stream: ReadableStream<Uint8Array>,
-	emit: (reply: PickReply) => void,
-): Promise<void> {
-	let buffer = "";
+/** resolves when the helper ends the stream, or close() aborts it */
+async function drain(stream: ReadableStream<Uint8Array>): Promise<void> {
 	try {
-		for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
-			buffer += chunk;
-			const events = buffer.split("\n\n");
-			buffer = events.pop() ?? "";
-			for (const event of events) {
-				const data = event
-					.split("\n")
-					.filter((line) => line.startsWith("data: "))
-					.map((line) => line.slice("data: ".length))
-					.join("\n");
-				const reply = parseReply(data);
-				if (reply) emit(reply);
-			}
-		}
+		for await (const _ of stream);
 	} catch {
 		// the helper went away or close() aborted the stream
-	}
-}
-
-function parseReply(data: string): PickReply | undefined {
-	try {
-		return pickReplySchema.parse(JSON.parse(data));
-	} catch {
-		return undefined;
 	}
 }

@@ -9,7 +9,6 @@ export { type TippaOptions, tippa } from "./plugin.ts";
 export type {
 	AgentStatus,
 	PickElement,
-	PickReply,
 	PickRequest,
 	StatusEvent,
 } from "./protocol.ts";
