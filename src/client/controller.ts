@@ -2,28 +2,17 @@ import type { ViteHotContext } from "vite/types/hot.d.ts";
 import {
 	type AgentStatus,
 	type ClientConfig,
-	type PickReply,
 	type PickRequest,
-	REPLY_EVENT,
 	STATUS_EVENT,
 	type StatusEvent,
 } from "../protocol.ts";
-
-export type Badge = "sending" | "sent" | "working" | "done" | "question";
-
-export interface PickState {
-	badge: Badge;
-	/** claude's reply, shown in the bubble */
-	message?: string;
-}
 
 export const NOT_CONNECTED = "Claude isn't connected";
 
 export type SendOutcome = { ok: true } | { ok: false; error: string };
 
-/** send state and replies per pick, with no dom: the overlay renders from it */
+/** claude's connection and the post of each pick, with no dom: the overlay renders from it */
 export class PickController {
-	readonly picks = new Map<string, PickState>();
 	readonly #config: ClientConfig;
 	readonly #post: typeof fetch;
 	readonly #listeners = new Set<() => void>();
@@ -56,19 +45,11 @@ export class PickController {
 		this.#changed();
 	}
 
-	handleReply({ pickId, status, message }: PickReply): void {
-		if (!this.picks.has(pickId)) return;
-		this.picks.set(pickId, { badge: status, ...(message && { message }) });
-		this.#changed();
-	}
-
 	#changed(): void {
 		for (const listener of this.#listeners) listener();
 	}
 
 	async send(pick: PickRequest): Promise<SendOutcome> {
-		this.picks.set(pick.pickId, { badge: "sending" });
-		this.#changed();
 		const statusVersion = this.#statusVersion;
 		const outcome = await this.#post(this.#config.endpoint, {
 			method: "POST",
@@ -78,18 +59,15 @@ export class PickController {
 			},
 			body: JSON.stringify(pick),
 		}).then(toOutcome, unreachable);
-		if (!outcome.ok) {
-			this.picks.delete(pick.pickId);
-			if (
-				outcome.error === NOT_CONNECTED &&
-				statusVersion === this.#statusVersion
-			)
-				this.#status = "waiting";
+		if (
+			!outcome.ok &&
+			outcome.error === NOT_CONNECTED &&
+			statusVersion === this.#statusVersion &&
+			this.#status !== "waiting"
+		) {
+			this.#status = "waiting";
+			this.#changed();
 		}
-		// a reply can beat the 202 here; it outranks "sent"
-		else if (this.picks.get(pick.pickId)?.badge === "sending")
-			this.picks.set(pick.pickId, { badge: "sent" });
-		this.#changed();
 		return outcome;
 	}
 }
@@ -97,7 +75,6 @@ export class PickController {
 declare module "vite/types/customEvent.d.ts" {
 	interface CustomEventMap {
 		[STATUS_EVENT]: StatusEvent;
-		[REPLY_EVENT]: PickReply;
 	}
 }
 
@@ -108,7 +85,6 @@ export function listen(
 	hot.on(STATUS_EVENT, (status: StatusEvent) =>
 		controller.handleStatus(status),
 	);
-	hot.on(REPLY_EVENT, (reply: PickReply) => controller.handleReply(reply));
 }
 
 async function toOutcome(response: Response): Promise<SendOutcome> {

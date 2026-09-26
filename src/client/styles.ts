@@ -82,6 +82,25 @@ textarea {
 	color: var(--tippa-bg);
 	font-size: 12px;
 }
+/* SENT_MS in overlay.ts removes them as this ends */
+.tag.sent { animation: tippa-sent 2s ease-in forwards; }
+@keyframes tippa-sent {
+	80% { opacity: 1; }
+	to { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.tag.sent { animation: none; }
+}
+/* read by screen readers only */
+.announce {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 button {
 	padding: 4px 10px;
@@ -102,16 +121,14 @@ textarea:focus-visible, button:focus-visible, .handle:focus-visible {
 .pick-head { display: flex; align-items: center; gap: 6px; }
 .badge {
 	padding: 1px 6px;
-	border: 1px solid var(--tippa-border);
+	border: 1px solid var(--tippa-error);
 	border-radius: 999px;
+	color: var(--tippa-error);
 	font-size: 12px;
 }
-.badge[data-badge="question"] { border-color: var(--tippa-focus); color: var(--tippa-focus); }
-.badge[data-badge="failed"] { border-color: var(--tippa-error); color: var(--tippa-error); }
 .dismiss { padding: 0 6px; line-height: 1.2; }
 /* while react-grab picks, the page under a marker stays pickable */
 .layer[data-grabbing] .pick { pointer-events: none; }
 .layer[data-grabbing] .dismiss { pointer-events: auto; }
 .bubble { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
-.bubble:empty { display: none; }
 `;

@@ -1,10 +1,6 @@
 import { domToPng } from "modern-screenshot";
 import { MAX_PICK_ELEMENTS, MAX_SCREENSHOT_CHARS } from "../protocol.ts";
-import {
-	NOT_CONNECTED,
-	type PickController,
-	type PickState,
-} from "./controller.ts";
+import { NOT_CONNECTED, type PickController } from "./controller.ts";
 import type { PickTarget } from "./grab.ts";
 import { base64Of, buildPick, newPickId, type Selection } from "./payload.ts";
 import { css } from "./styles.ts";
@@ -31,6 +27,8 @@ const RETRY_MARGIN = 0.9;
 // radix's Dialog content sets no aria-modal; its role and open state mark it
 const MODAL =
 	'dialog:modal, [aria-modal="true"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]';
+/** how long a sent note's Sent tags stay, their fade included; styles.ts fades them over the same time */
+const SENT_MS = 2000;
 const RACED_CONNECT = "Couldn't reach Claude. Send again.";
 const TOO_MANY = `Up to ${MAX_PICK_ELEMENTS} elements per note.`;
 const NO_SOURCE =
@@ -50,32 +48,18 @@ interface Draft {
 	/** closed by the user; a send still waiting on its screenshot posts nothing */
 	cancelled: boolean;
 	error?: string | undefined;
-	/** its pick's id once posted; the draft's own tags stand in for the pick's until it closes */
-	sentAs?: string | undefined;
 }
 
-interface Sent {
-	/** element 1's, where the marker sits */
-	anchor: Anchor;
-	/** the picked component, naming the marker's dismiss button */
-	name: string;
-	/** elements 2 onward, tagged with their numbers until the pick is done */
-	others: Anchor[];
-}
-
-/** an element's number on the page */
+/** an element's number in the open note, or Sent once its note posted */
 interface Tag {
 	root: HTMLElement;
 	anchor: Anchor;
 }
 
+/** a send that failed after the user moved on to another note: its error and note, until dismissed */
 interface Marker {
 	root: HTMLElement;
-	badge: HTMLElement;
-	bubble: HTMLElement;
 	anchor: Anchor;
-	/** a send that failed after the user moved on; the controller no longer has it */
-	failed: boolean;
 }
 
 /** follows its element; after an hmr repaint replaces the node, stays where it last was */
@@ -100,7 +84,7 @@ class Anchor {
 }
 
 /**
- * the note box and per-pick badges and bubbles, in a shadow root in the top layer:
+ * the note box, element tags and failed-send markers, in a shadow root in the top layer:
  * the app's css can't reach in, and react-grab skips the host when hit-testing.
  */
 export function mountOverlay(controller: PickController): PickTarget {
@@ -146,7 +130,9 @@ export function mountOverlay(controller: PickController): PickTarget {
 		list,
 		el("div", { class: "actions" }, cancel, send),
 	);
-	layer.append(composer);
+	// outside the composer, which hides as a note sends; in the tree while empty, like the notice
+	const announce = el("p", { class: "announce", role: "status" });
+	layer.append(composer, announce);
 	root.append(layer);
 	// the dialog the open box's pick sits in; the host lives in it while the box is open
 	let modal: Element | undefined;
@@ -192,9 +178,8 @@ export function mountOverlay(controller: PickController): PickTarget {
 
 	const markers = new Map<string, Marker>();
 	const tags = new Map<string, Tag>();
-	const sent = new Map<string, Sent>();
-	// the state each dismissed marker last showed; the next reply to its pick brings it back
-	const dismissed = new Map<string, PickState>();
+	// each sent note's elements, tagged Sent until its fade ends
+	const sent = new Map<string, Anchor[]>();
 	let draft: Draft | undefined;
 	let draftAnchor: Anchor | undefined;
 	// focus before the box opened, given back when it closes
@@ -227,75 +212,53 @@ export function mountOverlay(controller: PickController): PickTarget {
 		);
 	}
 
-	function renderPicks(): void {
-		if (!host.isConnected) attach();
-		for (const [pickId, marker] of markers) {
-			if (controller.picks.has(pickId) || marker.failed) continue;
-			marker.root.remove();
-			markers.delete(pickId);
-		}
-		for (const [pickId, state] of controller.picks) {
-			const pick = sent.get(pickId);
-			if (!pick || dismissed.get(pickId) === state) continue;
-			dismissed.delete(pickId);
-			const marker = markers.get(pickId) ?? addMarker(pickId, pick);
-			// unchanged text is left alone: a rewrite re-announces the marker's status region
-			if (setText(marker.badge, state.badge))
-				marker.badge.dataset.badge = state.badge;
-			setText(marker.bubble, state.message ?? "");
-		}
-		renderTags();
-		// new text resizes a panel
-		schedule();
-	}
-
-	function addMarker(pickId: string, { anchor, name }: Sent): Marker {
-		const badge = el("span", { class: "badge" });
+	/** a marker for a note whose send failed after the user moved on: gone when dismissed */
+	function showFailure(
+		pickId: string,
+		anchor: Anchor,
+		name: string,
+		message: string,
+	): void {
 		const dismiss = el(
 			"button",
 			{
 				type: "button",
 				class: "dismiss",
-				"aria-label": `Dismiss reply for ${name}`,
+				"aria-label": `Dismiss unsent note for ${name}`,
 			},
 			"×",
 		);
-		const bubble = el("p", { class: "bubble" });
 		const markerRoot = el(
 			"div",
 			{ class: "panel pick", role: "status" },
-			el("div", { class: "pick-head" }, badge, dismiss),
-			bubble,
+			el(
+				"div",
+				{ class: "pick-head" },
+				el("span", { class: "badge" }, "not sent"),
+				dismiss,
+			),
+			el("p", { class: "bubble" }, message),
 		);
 		dismiss.addEventListener("click", () => {
 			markerRoot.remove();
 			markers.delete(pickId);
-			const state = controller.picks.get(pickId);
-			// its element is gone: a later reply would have nowhere to show
-			if (!anchor.element.isConnected) sent.delete(pickId);
-			else if (state) dismissed.set(pickId, state);
-			renderTags();
 		});
 		layer.append(markerRoot);
-		const marker = {
-			root: markerRoot,
-			badge,
-			bubble,
-			anchor,
-			failed: false,
-		};
-		markers.set(pickId, marker);
-		return marker;
+		markers.set(pickId, { root: markerRoot, anchor });
+		schedule();
 	}
 
-	/** a marker the controller doesn't track: gone when dismissed */
-	function showFailure(pickId: string, pick: Sent, message: string): void {
-		const marker = addMarker(pickId, pick);
-		marker.failed = true;
-		marker.badge.textContent = "not sent";
-		marker.badge.dataset.badge = "failed";
-		marker.bubble.textContent = message;
-		schedule();
+	/** tags a sent note's elements Sent, and clears them once they've faded */
+	function showSent(pickId: string, anchors: Anchor[]): void {
+		if (!host.isConnected) attach();
+		sent.set(pickId, anchors);
+		setText(announce, "Sent to Claude");
+		renderTags();
+		setTimeout(() => {
+			sent.delete(pickId);
+			if (sent.size === 0) setText(announce, "");
+			renderTags();
+		}, SENT_MS);
 	}
 
 	let frame = 0;
@@ -308,7 +271,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 		frame = requestAnimationFrame(() => {
 			frame = 0;
 			if (modal && !isOpenModal(modal)) attach();
-			// removed from the page: nothing to place until a pick or reply attaches it again
+			// removed from the page: nothing to place until a pick attaches it again
 			if (!host.isConnected) return;
 			placeAll();
 			if (draftAnchor) schedule();
@@ -435,19 +398,11 @@ export function mountOverlay(controller: PickController): PickTarget {
 		const sendable = elements.filter((element) => element !== undefined);
 		if (!first || sendable.length !== elements.length) return;
 		const pickId = newPickId();
-		const pick: Sent = {
-			anchor: first.anchor,
-			name: sendable[0]?.selection.component ?? "",
-			others: current.elements.slice(1).map(({ anchor }) => anchor),
-		};
-		sent.set(pickId, pick);
-		current.sentAs = pickId;
 		const outcome = await controller.send(
 			buildPick({ pickId, note: text, elements: sendable }),
 		);
 		current.sending = false;
 		if (!outcome.ok) {
-			sent.delete(pickId);
 			// a 503 shows through the controller's notice, which clears when claude connects
 			if (outcome.error !== NOT_CONNECTED) current.error = outcome.error;
 			// claude connected while this one was in flight
@@ -455,12 +410,21 @@ export function mountOverlay(controller: PickController): PickTarget {
 		}
 		if (outcome.ok) {
 			if (draft === current) close();
+			showSent(
+				pickId,
+				current.elements.map(({ anchor }) => anchor),
+			);
 		} else if (draft === current) renderComposer();
 		else if (current.cancelled) return;
 		// picked something else while this one was sending: a note typed there stays,
 		// and this one's failure and note go on its marker
 		else if (draft && !draft.sending && note.value.trim())
-			showFailure(pickId, pick, `${outcome.error}\n${text}`);
+			showFailure(
+				pickId,
+				first.anchor,
+				sendable[0]?.selection.component ?? "",
+				`${outcome.error}\n${text}`,
+			);
 		// otherwise it comes back as the draft so its note isn't lost
 		else open(current, text);
 	}
@@ -483,8 +447,9 @@ export function mountOverlay(controller: PickController): PickTarget {
 	});
 	cancel.addEventListener("click", close);
 	controller.subscribe(() => {
+		// its dialog may have unmounted with it since the last frame
+		if (!host.isConnected) attach();
 		renderComposer();
-		renderPicks();
 	});
 
 	function open(next: Draft, text: string): void {
@@ -598,26 +563,33 @@ export function mountOverlay(controller: PickController): PickTarget {
 	});
 
 	function renderTags(): void {
-		const wanted = new Map<string, { anchor: Anchor; text: string }>();
+		const wanted = new Map<
+			string,
+			{ anchor: Anchor; text: string; className: string }
+		>();
 		draft?.elements.forEach(({ anchor }, index) => {
-			wanted.set(`draft ${index}`, { anchor, text: `[${index + 1}]` });
-		});
-		for (const [pickId, { others }] of sent) {
-			const state = controller.picks.get(pickId);
-			if (!state || state.badge === "done" || !markers.has(pickId)) continue;
-			if (pickId === draft?.sentAs) continue;
-			others.forEach((anchor, index) => {
-				wanted.set(`${pickId} ${index}`, { anchor, text: `[${index + 2}]` });
+			wanted.set(`draft ${index}`, {
+				anchor,
+				text: `[${index + 1}]`,
+				className: "tag",
 			});
-		}
+		});
+		for (const [pickId, anchors] of sent)
+			anchors.forEach((anchor, index) => {
+				wanted.set(`${pickId} ${index}`, {
+					anchor,
+					text: "Sent",
+					className: "tag sent",
+				});
+			});
 		for (const [key, tag] of tags) {
 			if (wanted.has(key)) continue;
 			tag.root.remove();
 			tags.delete(key);
 		}
-		for (const [key, { anchor, text }] of wanted) {
+		for (const [key, { anchor, text, className }] of wanted) {
 			const known = tags.get(key);
-			const tag = known ?? addTag(key, anchor);
+			const tag = known ?? addTag(key, anchor, className);
 			tag.anchor = anchor;
 			setText(tag.root, text);
 			// placed now, not next frame: a new tag would flash at the corner first
@@ -627,10 +599,11 @@ export function mountOverlay(controller: PickController): PickTarget {
 		schedule();
 	}
 
-	function addTag(key: string, anchor: Anchor): Tag {
-		// the note's element list names them; on the page they're only a visual cue
+	function addTag(key: string, anchor: Anchor, className: string): Tag {
+		// the note's element list names them, and the announce region says a note sent;
+		// on the page they're only a visual cue
 		const tag = {
-			root: el("span", { class: "tag", "aria-hidden": "true" }),
+			root: el("span", { class: className, "aria-hidden": "true" }),
 			anchor,
 		};
 		layer.append(tag.root);

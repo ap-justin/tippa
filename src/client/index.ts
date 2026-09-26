@@ -6,9 +6,8 @@ import { mountOverlay } from "./overlay.ts";
 export type { ClientConfig };
 
 /**
- * called once per page by the plugin's loader. subscribe to `tippa:status` and
- * `tippa:reply` on `import.meta.hot` before returning: the loader asks for the
- * current status right after.
+ * called once per page by the plugin's loader. subscribe to `tippa:status` on
+ * `import.meta.hot` before returning: the loader asks for the current status right after.
  */
 export function start(config: ClientConfig): void {
 	// wrapped: window.fetch called with the controller as `this` throws "illegal invocation"

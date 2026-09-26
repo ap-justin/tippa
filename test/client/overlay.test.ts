@@ -282,10 +282,11 @@ test("a 503 answered after claude connected leaves send on to retry", async () =
 	ui.controller.handleStatus({ status: "connected" });
 	resolve(Response.json({}, { status: 503 }));
 
-	await vi.waitFor(() => expect(ui.controller.picks.size).toBe(0));
+	await vi.waitFor(() =>
+		expect(ui.notice.textContent).toBe("Couldn't reach Claude. Send again."),
+	);
 	expect(ui.controller.canSend).toBe(true);
 	expect(ui.send.disabled).toBe(false);
-	expect(ui.notice.textContent).toBe("Couldn't reach Claude. Send again.");
 	expect(ui.composer.hidden).toBe(false);
 });
 
@@ -375,46 +376,6 @@ test("each pick re-raises the overlay to the top of the top layer", () => {
 	expect(popoverCalls).toEqual([false, true]);
 });
 
-test("a reply after the overlay was removed puts it back with its marker", async () => {
-	const ui = mount();
-	ui.pick();
-	ui.send.click();
-	await vi.waitFor(() => expect(ui.composer.hidden).toBe(true));
-	const [{ pickId } = { pickId: "" }] = ui.posted();
-	ui.host.remove();
-
-	ui.controller.handleReply({
-		pickId,
-		status: "done",
-		message: "made it bold",
-	});
-
-	expect(ui.host.isConnected).toBe(true);
-	expect(popoverCalls.at(-1)).toBe(true);
-	expect(ui.root.querySelector(".bubble")?.textContent).toBe("made it bold");
-});
-
-test("a dismissed marker stays gone until claude replies to its pick again", async () => {
-	const ui = mount();
-	const { pickId } = await ui.sendPick();
-	ui.controller.handleReply({ pickId, status: "working", message: "" });
-	ui.markers()[0]?.querySelector<HTMLButtonElement>(".dismiss")?.click();
-	expect(ui.markers()).toHaveLength(0);
-
-	ui.controller.handleStatus({ status: "connected" });
-	expect(ui.markers()).toHaveLength(0);
-
-	ui.controller.handleReply({
-		pickId,
-		status: "question",
-		message: "which price?",
-	});
-	expect(ui.markers()).toHaveLength(1);
-	expect(ui.markers()[0]?.querySelector(".bubble")?.textContent).toBe(
-		"which price?",
-	);
-});
-
 function focusedPageButton(): HTMLButtonElement {
 	const button = document.createElement("button");
 	button.className = "page";
@@ -471,45 +432,6 @@ test("the note is described by its target line and the notice, which is rendered
 	expect(getComputedStyle(ui.notice).display).not.toBe("none");
 });
 
-test("a reply rewrites only its own marker, so other markers aren't announced again", async () => {
-	const ui = mount();
-	const a = await ui.sendPick("bold");
-	const b = await ui.sendPick("red", { ...selection, component: "Header" });
-	ui.controller.handleReply({
-		pickId: a.pickId,
-		status: "done",
-		message: "made it bold",
-	});
-	const [markerA] = ui.markers();
-	if (!markerA) throw new Error("no marker");
-	const changes = new MutationObserver(() => {});
-	changes.observe(markerA, {
-		subtree: true,
-		childList: true,
-		characterData: true,
-		attributes: true,
-	});
-
-	ui.controller.handleReply({
-		pickId: b.pickId,
-		status: "working",
-		message: "",
-	});
-	ui.controller.handleStatus({ status: "connected" });
-
-	expect(changes.takeRecords()).toEqual([]);
-});
-
-test("each dismiss button is named for its pick", async () => {
-	const ui = mount();
-	await ui.sendPick();
-
-	const dismiss = ui.markers()[0]?.querySelector("button");
-	expect(dismiss?.getAttribute("aria-label")).toBe(
-		"Dismiss reply for PriceCard",
-	);
-});
-
 test.each(["keydown", "keyup", "keypress"])(
 	"%s while typing a note doesn't reach the page's shortcut listeners",
 	(type) => {
@@ -527,7 +449,8 @@ test.each(["keydown", "keyup", "keypress"])(
 	},
 );
 
-test("a send that fails while another note is being typed keeps that note and shows the failure on its marker", async () => {
+/** a send that fails while the next note is being typed, which leaves a marker for it */
+async function failWhileTyping() {
 	const { promise: response, resolve } = deferred<Response>();
 	const ui = mount(vi.fn<typeof fetch>(() => response));
 	ui.pick();
@@ -542,6 +465,14 @@ test("a send that fails while another note is being typed keeps that note and sh
 	await vi.waitFor(() =>
 		expect(ui.root.querySelector(".badge")?.textContent).toBe("not sent"),
 	);
+	const [marker] = ui.markers();
+	if (!marker) throw new Error("no marker");
+	return { ui, marker };
+}
+
+test("a send that fails while another note is being typed keeps that note and shows the failure on its marker", async () => {
+	const { ui } = await failWhileTyping();
+
 	expect(ui.note.value).toBe("make it red");
 	expect(ui.root.querySelector(".target")?.textContent).toMatch(/^Header/);
 	expect(ui.markers()).toHaveLength(1);
@@ -550,8 +481,16 @@ test("a send that fails while another note is being typed keeps that note and sh
 		"Couldn't send (400 invalid_pick)\nmake the price bold",
 	);
 	expect(marker?.querySelector("button")?.getAttribute("aria-label")).toBe(
-		"Dismiss reply for PriceCard",
+		"Dismiss unsent note for PriceCard",
 	);
+});
+
+test("dismissing a failure's marker removes it", async () => {
+	const { ui, marker } = await failWhileTyping();
+
+	marker.querySelector<HTMLButtonElement>(".dismiss")?.click();
+
+	expect(ui.markers()).toHaveLength(0);
 });
 
 /** real frames; happy-dom runs rAF callbacks off its timers */
@@ -559,34 +498,25 @@ function frames(count: number): Promise<void> {
 	return new Promise((done) => setTimeout(done, 20 * count));
 }
 
-test.each(["working", "question", "done"] as const)(
-	"with the box closed, a %s marker isn't measured every frame",
-	async (status) => {
-		const ui = mount();
-		const { pickId } = await ui.sendPick();
-		ui.controller.handleReply({ pickId, status, message: "" });
-		await frames(2);
-		const nextFrame = vi.spyOn(window, "requestAnimationFrame");
+test("with the box closed, Sent tags aren't measured every frame", async () => {
+	const ui = mount();
+	await ui.sendPick();
+	await frames(2);
+	const nextFrame = vi.spyOn(window, "requestAnimationFrame");
 
-		await frames(3);
+	await frames(3);
 
-		expect(nextFrame).not.toHaveBeenCalled();
-		nextFrame.mockRestore();
-	},
-);
+	expect(nextFrame).not.toHaveBeenCalled();
+	nextFrame.mockRestore();
+});
 
-/** a done marker, and its element moved somewhere else on the page */
+/** a Sent tag, and its element moved somewhere else on the page */
 async function settledAndMoved() {
 	const ui = mount();
-	const { pickId, element } = await ui.sendPick();
-	ui.controller.handleReply({
-		pickId,
-		status: "done",
-		message: "made it bold",
-	});
+	const { element } = await ui.sendPick();
 	await frames(2);
-	const [marker] = ui.markers();
-	if (!marker) throw new Error("no marker");
+	const marker = ui.root.querySelector<HTMLElement>(".tag");
+	if (!marker) throw new Error("no tag");
 	const before = marker.style.transform;
 	vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
 		new DOMRect(40, 300, 10, 10),
@@ -613,7 +543,7 @@ test.each([
 			document.body.append(replaced);
 		},
 	],
-])("a done marker follows its element again when %s", async (_, change) => {
+])("a Sent tag follows its element again when %s", async (_, change) => {
 	const { marker, before } = await settledAndMoved();
 
 	change();
@@ -622,22 +552,21 @@ test.each([
 	expect(marker.style.transform).not.toBe(before);
 });
 
-test("a placement pass measures every marker before moving any", async () => {
+test("a placement pass measures every tag before moving any", async () => {
 	const ui = mount();
 	const a = await ui.sendPick("bold");
 	const b = await ui.sendPick("red", { ...selection, component: "Header" });
 	await frames(2);
-	// where the markers stood at each measurement
+	// where the tags stood at each measurement
 	const spotsAtEachRead: string[] = [];
 	for (const element of [a.element, b.element])
 		vi.spyOn(element, "getBoundingClientRect").mockImplementation(() => {
 			spotsAtEachRead.push(
-				ui
-					.markers()
-					.map((marker) => marker.style.transform)
+				sentTags(ui)
+					.map((tag) => tag.style.transform)
 					.join(" "),
 			);
-			// a new spot every read, so the pass moves both markers
+			// a new spot every read, so the pass moves both tags
 			return new DOMRect(0, spotsAtEachRead.length * 10, 10, 10);
 		});
 
@@ -647,12 +576,15 @@ test("a placement pass measures every marker before moving any", async () => {
 	const [first, second] = spotsAtEachRead;
 	expect(second).toBe(first);
 	expect(
-		ui
-			.markers()
-			.map((marker) => marker.style.transform)
+		sentTags(ui)
+			.map((tag) => tag.style.transform)
 			.join(" "),
 	).not.toBe(second);
 });
+
+function sentTags(ui: ReturnType<typeof mount>): HTMLElement[] {
+	return [...ui.root.querySelectorAll<HTMLElement>(".tag")];
+}
 
 /** the content element radix's Dialog renders (no aria-modal), or an aria-modal one */
 function openModal(attributes: Record<string, string>): HTMLElement {
@@ -726,11 +658,9 @@ test("a pick outside any dialog leaves the overlay on the page", () => {
 });
 
 test("while react-grab is picking, markers let the pointer through to the page except their dismiss button", async () => {
-	const ui = mount();
-	await ui.sendPick();
-	const [marker] = ui.markers();
-	const dismiss = marker?.querySelector("button");
-	if (!marker || !dismiss) throw new Error("no marker");
+	const { ui, marker } = await failWhileTyping();
+	const dismiss = marker.querySelector("button");
+	if (!dismiss) throw new Error("no dismiss");
 
 	ui.overlay.grabbing(true);
 	expect(getComputedStyle(marker).pointerEvents).toBe("none");
@@ -740,28 +670,7 @@ test("while react-grab is picking, markers let the pointer through to the page e
 	expect(getComputedStyle(marker).pointerEvents).toBe("auto");
 });
 
-test("a done marker whose text changes is placed again for its new size", async () => {
-	const ui = mount();
-	const { pickId, element } = await ui.sendPick();
-	ui.controller.handleReply({
-		pickId,
-		status: "done",
-		message: "made it bold",
-	});
-	await frames(2);
-	const measure = vi.spyOn(element, "getBoundingClientRect");
-
-	ui.controller.handleReply({
-		pickId,
-		status: "question",
-		message: "which price?",
-	});
-	await frames(2);
-
-	expect(measure).toHaveBeenCalled();
-});
-
-test("a reply landing after the box's dialog unmounted, before the next frame, puts the overlay back on the page", () => {
+test("a status change landing after the box's dialog unmounted, before the next frame, puts the overlay back on the page", () => {
 	const ui = mount();
 	const modal = openModal({ role: "dialog", "data-state": "open" });
 	ui.pick(selection, modal);
@@ -796,9 +705,9 @@ test("when the inner of two dialogs closes, the box moves to the outer one and k
 });
 
 test("a pick made with focus on a marker's dismiss button gives focus back to it", async () => {
-	const ui = mount();
-	await ui.sendPick();
-	const dismiss = ui.markers()[0]?.querySelector("button");
+	const { ui, marker } = await failWhileTyping();
+	ui.key({ key: "Escape" });
+	const dismiss = marker.querySelector("button");
 	dismiss?.focus();
 
 	ui.pick();
@@ -835,17 +744,6 @@ test("when neither the old focus nor the picked element can take it, the dialog 
 	ui.key({ key: "Escape" });
 
 	expect(document.activeElement).toBe(modal);
-});
-
-test("dismissing the marker of an element that's gone forgets the pick", async () => {
-	const ui = mount();
-	const { pickId, element } = await ui.sendPick();
-	element.remove();
-	ui.markers()[0]?.querySelector<HTMLButtonElement>(".dismiss")?.click();
-
-	ui.controller.handleReply({ pickId, status: "done", message: "done" });
-
-	expect(ui.markers()).toHaveLength(0);
 });
 
 function rows(ui: ReturnType<typeof mount>) {
@@ -1078,23 +976,59 @@ test("each element of an open note is tagged with its number on the page, and re
 	expect(tags(ui)).toEqual(["[1]", "[2]"]);
 });
 
-test("after a send, the pick's badge sits on element 1 and the other tags stay until the pick is done", async () => {
+test("a sent note tags each of its elements Sent, then clears them all after the fade", async () => {
+	vi.useFakeTimers();
 	const ui = mount();
 	ui.pick();
 	ui.pick(HEADER);
 	ui.pick(FOOTER);
 	ui.send.click();
 	await vi.waitFor(() => expect(ui.composer.hidden).toBe(true));
-	const [{ pickId } = { pickId: "" }] = ui.posted();
 
-	expect(ui.markers()).toHaveLength(1);
-	expect(tags(ui)).toEqual(["[2]", "[3]"]);
+	expect(tags(ui)).toEqual(["Sent", "Sent", "Sent"]);
+	expect(ui.markers()).toHaveLength(0);
+	expect(ui.root.querySelector(".announce")?.textContent).toBe(
+		"Sent to Claude",
+	);
 
-	ui.controller.handleReply({ pickId, status: "working", message: "" });
-	expect(tags(ui)).toEqual(["[2]", "[3]"]);
+	// vi.waitFor above may have stepped the clock up to one 50 ms interval past the 202
+	await vi.advanceTimersByTimeAsync(1900);
+	expect(tags(ui)).toEqual(["Sent", "Sent", "Sent"]);
 
-	ui.controller.handleReply({ pickId, status: "done", message: "moved it" });
+	await vi.advanceTimersByTimeAsync(100);
 	expect(tags(ui)).toEqual([]);
+	expect(ui.root.querySelector(".layer")?.children).toHaveLength(2);
+	expect(ui.root.querySelector(".announce")?.textContent).toBe("");
+});
+
+test("a note sent after picking something else tags its own elements Sent and leaves the open note as it is", async () => {
+	const { promise: response, resolve } = deferred<Response>();
+	const ui = mount(vi.fn<typeof fetch>(() => response));
+	ui.pick();
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	ui.pick(HEADER);
+	ui.type("make it red");
+
+	resolve(Response.json({}, { status: 202 }));
+
+	await vi.waitFor(() => expect(tags(ui)).toEqual(["[1]", "Sent"]));
+	expect(ui.composer.hidden).toBe(false);
+	expect(ui.note.value).toBe("make it red");
+});
+
+test("a 202 after the app's root re-render removed the overlay puts it back with its Sent tags", async () => {
+	const { promise: response, resolve } = deferred<Response>();
+	const ui = mount(vi.fn<typeof fetch>(() => response));
+	ui.pick();
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.post).toHaveBeenCalledOnce());
+	ui.host.remove();
+
+	resolve(Response.json({}, { status: 202 }));
+
+	await vi.waitFor(() => expect(tags(ui)).toEqual(["Sent"]));
+	expect(ui.host.isConnected).toBe(true);
 });
 
 test("Escape clears the note's tags", () => {
