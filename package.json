@@ -1,6 +1,6 @@
 {
 	"name": "tippa",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "pick an element in a vite react app and send the change request to a running claude code session",
 	"keywords": [
 		"vite-plugin",
