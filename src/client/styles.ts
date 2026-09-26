@@ -51,7 +51,8 @@ export const css = `
 }
 .panel[hidden] { display: none; }
 .composer { width: 360px; display: grid; gap: 6px; }
-label { font-weight: 600; }
+.handle { cursor: move; touch-action: none; }
+label { font-weight: 600; cursor: inherit; }
 .target, .notice { margin: 0; overflow-wrap: anywhere; }
 .target { color: var(--tippa-muted); font-size: 12px; }
 .notice { color: var(--tippa-error); }
@@ -93,7 +94,7 @@ button {
 }
 button[type="submit"] { background: var(--tippa-fg); color: var(--tippa-bg); border-color: var(--tippa-fg); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-textarea:focus-visible, button:focus-visible {
+textarea:focus-visible, button:focus-visible, .handle:focus-visible {
 	outline: 2px solid var(--tippa-focus);
 	outline-offset: 1px;
 }

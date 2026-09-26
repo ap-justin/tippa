@@ -1134,3 +1134,173 @@ test("adding an element inside an open dialog moves the box into it and keeps fo
 	expect(ui.root.activeElement).toBe(ui.note);
 	expect(rows(ui)).toHaveLength(2);
 });
+
+function pointer(
+	target: Element,
+	type: string,
+	clientX: number,
+	clientY: number,
+): void {
+	target.dispatchEvent(
+		new PointerEvent(type, {
+			bubbles: true,
+			composed: true,
+			cancelable: true,
+			pointerId: 1,
+			isPrimary: true,
+			button: 0,
+			clientX,
+			clientY,
+		}),
+	);
+}
+
+function drag(ui: ReturnType<typeof mount>, dx: number, dy: number): void {
+	const handle = ui.root.querySelector(".handle");
+	if (!handle) throw new Error("no handle");
+	pointer(handle, "pointerdown", 20, 20);
+	pointer(handle, "pointermove", 20 + dx / 2, 20 + dy / 2);
+	pointer(handle, "pointermove", 20 + dx, 20 + dy);
+	pointer(handle, "pointerup", 20 + dx, 20 + dy);
+}
+
+test("dragging the title row moves the box by the pointer's travel", () => {
+	const ui = mount();
+	ui.pick();
+	expect(ui.composer.style.transform).toBe("translate(8px, 8px)");
+
+	drag(ui, 100, 50);
+
+	expect(ui.composer.style.transform).toBe("translate(108px, 58px)");
+});
+
+function sizeBox(ui: ReturnType<typeof mount>, width: number, height: number) {
+	vi.spyOn(ui.composer, "offsetWidth", "get").mockReturnValue(width);
+	vi.spyOn(ui.composer, "offsetHeight", "get").mockReturnValue(height);
+}
+
+test("a dragged box stops a gap inside the viewport's edges", () => {
+	const ui = mount();
+	ui.pick();
+	sizeBox(ui, 360, 200);
+
+	drag(ui, 5000, 5000);
+	expect(ui.composer.style.transform).toBe(
+		`translate(${innerWidth - 368}px, ${innerHeight - 208}px)`,
+	);
+
+	drag(ui, -9000, -9000);
+	expect(ui.composer.style.transform).toBe("translate(8px, 8px)");
+});
+
+function nextFrame(): Promise<void> {
+	return new Promise((done) => requestAnimationFrame(() => done()));
+}
+
+test("a dragged box stays put through an add and the placement passes", async () => {
+	const ui = mount();
+	const element = ui.pick();
+	drag(ui, 100, 50);
+
+	ui.pick(HEADER);
+	vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+		new DOMRect(300, 200, 10, 10),
+	);
+	document.dispatchEvent(new Event("scroll"));
+	await nextFrame();
+	await nextFrame();
+
+	expect(ui.composer.style.transform).toBe("translate(108px, 58px)");
+});
+
+test("the next note opens beside its element again after Escape", async () => {
+	const ui = mount();
+	ui.pick();
+	drag(ui, 100, 50);
+	ui.key({ key: "Escape" });
+
+	ui.pick();
+	await nextFrame();
+
+	expect(ui.composer.style.transform).toBe("translate(8px, 8px)");
+});
+
+test("the next note opens beside its element again after a send", async () => {
+	const ui = mount();
+	ui.pick();
+	drag(ui, 100, 50);
+	ui.send.click();
+	await vi.waitFor(() => expect(ui.composer.hidden).toBe(true));
+
+	ui.pick();
+	await nextFrame();
+
+	expect(ui.composer.style.transform).toBe("translate(8px, 8px)");
+});
+
+test("arrow keys on the focused title row move the box, Shift in bigger steps", () => {
+	const ui = mount();
+	ui.pick();
+	const handle = ui.root.querySelector<HTMLElement>(".handle");
+	if (!handle) throw new Error("no handle");
+	expect(handle.getAttribute("aria-label")).toBe("Move note box");
+	handle.focus();
+	const press = (key: string, shiftKey = false) =>
+		handle.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key,
+				shiftKey,
+				bubbles: true,
+				composed: true,
+				cancelable: true,
+			}),
+		);
+
+	press("ArrowRight");
+	press("ArrowDown", true);
+	expect(ui.composer.style.transform).toBe("translate(18px, 58px)");
+
+	press("ArrowLeft", true);
+	press("ArrowUp");
+	expect(ui.composer.style.transform).toBe("translate(8px, 48px)");
+	expect(ui.root.activeElement).toBe(handle);
+});
+
+test("a drag reaches the page only as events react-grab ignores, and adds nothing", () => {
+	const ui = mount();
+	ui.pick();
+	const types = ["pointerdown", "pointermove", "pointerup", "click"];
+	const bubbled: string[] = [];
+	const unmarked: string[] = [];
+	const onBubble = (event: Event) => bubbled.push(event.type);
+	// react-grab listens on window in the capture phase and skips events from inside this attribute
+	const onCapture = (event: Event) => {
+		const marked = event
+			.composedPath()
+			.some(
+				(node) =>
+					node instanceof Element &&
+					node.hasAttribute("data-react-grab-ignore-events"),
+			);
+		if (!marked) unmarked.push(event.type);
+	};
+	for (const type of types) {
+		document.addEventListener(type, onBubble);
+		window.addEventListener(type, onCapture, { capture: true });
+	}
+
+	drag(ui, 100, 50);
+	ui.root
+		.querySelector(".handle")
+		?.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, composed: true, button: 0 }),
+		);
+
+	for (const type of types) {
+		document.removeEventListener(type, onBubble);
+		window.removeEventListener(type, onCapture, { capture: true });
+	}
+	expect(unmarked).toEqual([]);
+	expect(bubbled).toEqual([]);
+	expect(rows(ui)).toHaveLength(1);
+});

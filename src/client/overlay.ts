@@ -10,6 +10,15 @@ import { base64Of, buildPick, newPickId, type Selection } from "./payload.ts";
 import { css } from "./styles.ts";
 
 const GAP = 8;
+/** px an arrow key moves the note box; with Shift, BIG_STEP */
+const STEP = 10;
+const BIG_STEP = 50;
+const ARROWS: Partial<Record<string, [number, number]>> = {
+	ArrowLeft: [-1, 0],
+	ArrowRight: [1, 0],
+	ArrowUp: [0, -1],
+	ArrowDown: [0, 1],
+};
 /** the whole capture; past it the pick sends without a screenshot */
 const SCREENSHOT_DEADLINE_MS = 5000;
 /** modern-screenshot's, per image load and per fetch; under the deadline, so a hung asset is skipped, not the shot */
@@ -107,7 +116,17 @@ export function mountOverlay(controller: PickController): PickTarget {
 
 	const layer = el("div", { class: "layer", popover: "manual" });
 	const composer = el("form", { class: "panel composer", hidden: "" });
-	const label = el("label", { for: "note" }, "Note for Claude");
+	// pointer and arrow keys move the box; its label still names the note
+	const handle = el(
+		"div",
+		{
+			class: "handle",
+			tabindex: "0",
+			role: "button",
+			"aria-label": "Move note box",
+		},
+		el("label", { for: "note" }, "Note for Claude"),
+	);
 	const target = el("p", { class: "target", id: "target" });
 	const note = el("textarea", {
 		id: "note",
@@ -120,7 +139,7 @@ export function mountOverlay(controller: PickController): PickTarget {
 	const cancel = el("button", { type: "button" }, "Cancel");
 	const send = el("button", { type: "submit" }, "Send to Claude");
 	composer.append(
-		label,
+		handle,
 		target,
 		note,
 		notice,
@@ -180,6 +199,8 @@ export function mountOverlay(controller: PickController): PickTarget {
 	let draftAnchor: Anchor | undefined;
 	// focus before the box opened, given back when it closes
 	let returnFocus: HTMLElement | SVGElement | undefined;
+	// where the user moved this note's box; it stays there until the note closes
+	let moved: Point | undefined;
 
 	function renderComposer(): void {
 		const disabled =
@@ -304,15 +325,63 @@ export function mountOverlay(controller: PickController): PickTarget {
 				(tag): Placed => [tag.root, tag.anchor, tagSpot],
 			),
 		];
-		if (draftAnchor) panels.push([composer, draftAnchor, spotFor]);
+		if (draftAnchor) panels.push([composer, draftAnchor, composerSpot]);
 		// every read before any write: interleaved, each panel forces its own layout
 		const spots = panels.map(([panel, anchor, spot]) =>
 			spot(panel, anchor.rect()),
 		);
 		panels.forEach(([panel], index) => {
-			panel.style.transform = spots[index] ?? "";
+			const spot = spots[index];
+			panel.style.transform = spot ? translate(spot) : "";
 		});
 	}
+
+	function composerSpot(panel: HTMLElement, rect: DOMRect): Point {
+		return moved ? inView(panel, moved) : spotFor(panel, rect);
+	}
+
+	function moveBox(to: Point): void {
+		moved = inView(composer, to);
+		composer.style.transform = translate(moved);
+	}
+
+	let drag:
+		| { pointerId: number; x: number; y: number; from: Point }
+		| undefined;
+	// the app's bubble-phase listeners don't see a drag; react-grab's skip the host
+	for (const type of ["pointerdown", "pointermove", "pointerup", "click"])
+		handle.addEventListener(type, (event) => event.stopPropagation());
+	handle.addEventListener("pointerdown", (event) => {
+		if (event.button !== 0 || !event.isPrimary || !draftAnchor) return;
+		// no text selection, and focus stays in the note
+		event.preventDefault();
+		handle.setPointerCapture(event.pointerId);
+		drag = {
+			pointerId: event.pointerId,
+			x: event.clientX,
+			y: event.clientY,
+			from: composerSpot(composer, draftAnchor.rect()),
+		};
+	});
+	handle.addEventListener("pointermove", (event) => {
+		if (event.pointerId !== drag?.pointerId) return;
+		moveBox({
+			left: drag.from.left + event.clientX - drag.x,
+			top: drag.from.top + event.clientY - drag.y,
+		});
+	});
+	for (const type of ["pointerup", "pointercancel"])
+		handle.addEventListener(type, () => {
+			drag = undefined;
+		});
+	handle.addEventListener("keydown", (event) => {
+		const [dx, dy] = ARROWS[event.key] ?? [];
+		if (dx === undefined || dy === undefined || !draftAnchor) return;
+		event.preventDefault();
+		const step = event.shiftKey ? BIG_STEP : STEP;
+		const from = composerSpot(composer, draftAnchor.rect());
+		moveBox({ left: from.left + dx * step, top: from.top + dy * step });
+	});
 
 	function pageMoved(): void {
 		if (markers.size > 0 || tags.size > 0 || draftAnchor) schedule();
@@ -335,6 +404,8 @@ export function mountOverlay(controller: PickController): PickTarget {
 		if (draft) draft.cancelled = true;
 		draft = undefined;
 		draftAnchor = undefined;
+		moved = undefined;
+		drag = undefined;
 		// not when the user already moved on into the page while a send was out
 		if (composer.contains(root.activeElement))
 			giveFocusBack(returnFocus, picked);
@@ -430,6 +501,8 @@ export function mountOverlay(controller: PickController): PickTarget {
 					: undefined;
 		}
 		draft = next;
+		moved = undefined;
+		drag = undefined;
 		const [first] = next.elements;
 		draftAnchor = first?.anchor;
 		modal = first?.anchor.element.closest(MODAL) ?? undefined;
@@ -443,7 +516,9 @@ export function mountOverlay(controller: PickController): PickTarget {
 		renderList();
 		renderComposer();
 		if (draftAnchor)
-			composer.style.transform = spotFor(composer, draftAnchor.rect());
+			composer.style.transform = translate(
+				spotFor(composer, draftAnchor.rect()),
+			);
 		schedule();
 		note.focus();
 	}
@@ -546,7 +621,8 @@ export function mountOverlay(controller: PickController): PickTarget {
 			tag.anchor = anchor;
 			setText(tag.root, text);
 			// placed now, not next frame: a new tag would flash at the corner first
-			if (!known) tag.root.style.transform = tagSpot(tag.root, anchor.rect());
+			if (!known)
+				tag.root.style.transform = translate(tagSpot(tag.root, anchor.rect()));
 		}
 		schedule();
 	}
@@ -669,8 +745,18 @@ function location({ file, line, column }: Selection): string {
 	return [file, line, column].filter((part) => part !== undefined).join(":");
 }
 
-/** the transform putting `panel` below the element, or above it when there's no room below, on screen */
-function spotFor(panel: HTMLElement, rect: DOMRect): string {
+/** a panel's top-left corner in the viewport */
+interface Point {
+	left: number;
+	top: number;
+}
+
+function translate({ left, top }: Point): string {
+	return `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+
+/** `panel` below the element, or above it when there's no room below, on screen */
+function spotFor(panel: HTMLElement, rect: DOMRect): Point {
 	const { offsetWidth: width, offsetHeight: height } = panel;
 	const below = rect.bottom + GAP;
 	const top =
@@ -681,14 +767,29 @@ function spotFor(panel: HTMLElement, rect: DOMRect): string {
 		Math.max(GAP, rect.left),
 		Math.max(GAP, innerWidth - width - GAP),
 	);
-	return `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+	return { left, top };
 }
 
-/** the transform putting `tag` over the element's top-left corner, on screen */
-function tagSpot(tag: HTMLElement, rect: DOMRect): string {
-	const left = Math.min(Math.max(0, rect.left), innerWidth - tag.offsetWidth);
-	const top = Math.min(Math.max(0, rect.top), innerHeight - tag.offsetHeight);
-	return `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+/** the point nearest `{ left, top }` that keeps `panel` a gap inside the viewport; its top-left edges win when it can't fit */
+function inView(panel: HTMLElement, { left, top }: Point): Point {
+	return {
+		left: Math.min(
+			Math.max(GAP, left),
+			Math.max(GAP, innerWidth - panel.offsetWidth - GAP),
+		),
+		top: Math.min(
+			Math.max(GAP, top),
+			Math.max(GAP, innerHeight - panel.offsetHeight - GAP),
+		),
+	};
+}
+
+/** `tag` over the element's top-left corner, on screen */
+function tagSpot(tag: HTMLElement, rect: DOMRect): Point {
+	return {
+		left: Math.min(Math.max(0, rect.left), innerWidth - tag.offsetWidth),
+		top: Math.min(Math.max(0, rect.top), innerHeight - tag.offsetHeight),
+	};
 }
 
 /**
