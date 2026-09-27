@@ -1,4 +1,8 @@
-# tippa
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ap-justin/tippa/main/brand/tippa-header-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/ap-justin/tippa/main/brand/tippa-header-light.svg">
+  <img alt="tippa" src="https://raw.githubusercontent.com/ap-justin/tippa/main/brand/tippa-header-light.svg" width="226" height="64">
+</picture>
 
 [![CI](https://github.com/ap-justin/tippa/actions/workflows/ci.yml/badge.svg)](https://github.com/ap-justin/tippa/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/tippa)](https://www.npmjs.com/package/tippa)
 
